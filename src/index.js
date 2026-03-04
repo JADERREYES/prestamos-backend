@@ -5,16 +5,35 @@ const mongoose = require('mongoose');
 
 const app = express();
 
-// Middleware
+// Middleware CORS
 app.use(cors({
-  origin: [
-    'http://localhost:3000',
-    'http://localhost:3001',
-    process.env.FRONTEND_ADMIN_URL,
-    process.env.FRONTEND_COBRADOR_URL,
-  ].filter(Boolean),
+  origin: function(origin, callback) {
+    const allowedOrigins = [
+      'http://localhost:3000',
+      'http://localhost:3001',
+      'https://frontend-admin-mu-fawn.vercel.app',
+      process.env.FRONTEND_ADMIN_URL,
+      process.env.FRONTEND_COBRADOR_URL,
+    ].filter(Boolean);
+
+    // Permitir requests sin origin (mobile apps, Postman, etc.)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.log('❌ CORS bloqueado para origen:', origin);
+      callback(new Error('No permitido por CORS'));
+    }
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
 }));
+
+// Manejo de preflight para todas las rutas
+app.options('*', cors());
+
 app.use(express.json());
 
 // Conectar MongoDB
