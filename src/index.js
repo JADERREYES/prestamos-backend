@@ -8,17 +8,19 @@ const app = express();
 // Middleware CORS
 app.use(cors({
   origin: function(origin, callback) {
+    if (!origin) return callback(null, true);
+
     const allowedOrigins = [
       'http://localhost:3000',
       'http://localhost:3001',
-      'https://frontend-admin-mu-fawn.vercel.app',
       process.env.FRONTEND_ADMIN_URL,
       process.env.FRONTEND_COBRADOR_URL,
     ].filter(Boolean);
 
-    if (!origin) return callback(null, true);
+    // Permitir cualquier subdominio de vercel.app
+    const isVercel = origin.endsWith('.vercel.app');
 
-    if (allowedOrigins.includes(origin)) {
+    if (isVercel || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
       console.log('❌ CORS bloqueado para origen:', origin);
@@ -30,16 +32,13 @@ app.use(cors({
   credentials: true
 }));
 
-// Manejo de preflight
 app.options('*', cors());
 
 app.use(express.json());
 
-
-// 🔍 LOGGER DE PETICIONES - para debug
+// Logger
 app.use((req, res, next) => {
   const timestamp = new Date().toISOString();
-
   console.log(`\n📡 [${timestamp}]`);
   console.log(`   Método:  ${req.method}`);
   console.log(`   Ruta:    ${req.path}`);
@@ -47,22 +46,18 @@ app.use((req, res, next) => {
   console.log(`   Body:    ${JSON.stringify(req.body)}`);
 
   const originalJson = res.json.bind(res);
-
   res.json = (data) => {
     console.log(`   Status:  ${res.statusCode}`);
     console.log(`   Resp:    ${JSON.stringify(data)}`);
     return originalJson(data);
   };
-
   next();
 });
-
 
 // Conectar MongoDB
 mongoose.connect(process.env.MONGODB_URI)
   .then(() => console.log('✅ MongoDB conectado'))
   .catch(err => console.error('❌ Error MongoDB:', err));
-
 
 // Rutas
 app.use('/api/auth', require('./routes/auth'));
@@ -75,9 +70,5 @@ app.use('/api/dashboard', require('./routes/dashboard'));
 
 app.get('/', (req, res) => res.json({ message: 'API Gota a Gota funcionando ✅' }));
 
-
 const PORT = process.env.PORT || 5000;
-
-app.listen(PORT, () => {
-  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
-});
+app.listen(PORT, () => console.log(`🚀 Servidor corriendo en puerto ${PORT}`));
