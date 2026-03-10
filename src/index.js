@@ -1,65 +1,37 @@
 require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
 
+const tenantMiddleware = require('./middleware/tenant.middleware');
+
 const app = express();
 
-// Middleware CORS
+/* CORS */
+
 app.use(cors({
-  origin: function(origin, callback) {
-    if (!origin) return callback(null, true);
-
-    const allowedOrigins = [
-      'http://localhost:3000',
-      'http://localhost:3001',
-      process.env.FRONTEND_ADMIN_URL,
-      process.env.FRONTEND_COBRADOR_URL,
-    ].filter(Boolean);
-
-    // Permitir cualquier subdominio de vercel.app
-    const isVercel = origin.endsWith('.vercel.app');
-
-    if (isVercel || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      console.log('❌ CORS bloqueado para origen:', origin);
-      callback(new Error('No permitido por CORS'));
-    }
-  },
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
+  origin:true,
+  credentials:true
 }));
-
-app.options('*', cors());
 
 app.use(express.json());
 
-// Logger
-app.use((req, res, next) => {
-  const timestamp = new Date().toISOString();
-  console.log(`\n📡 [${timestamp}]`);
-  console.log(`   Método:  ${req.method}`);
-  console.log(`   Ruta:    ${req.path}`);
-  console.log(`   Origin:  ${req.headers.origin || 'sin origin'}`);
-  console.log(`   Body:    ${JSON.stringify(req.body)}`);
+/* LOGGER */
 
-  const originalJson = res.json.bind(res);
-  res.json = (data) => {
-    console.log(`   Status:  ${res.statusCode}`);
-    console.log(`   Resp:    ${JSON.stringify(data)}`);
-    return originalJson(data);
-  };
+app.use((req,res,next)=>{
+
+  console.log(req.method, req.path);
   next();
+
 });
 
-// Conectar MongoDB
-mongoose.connect(process.env.MONGODB_URI)
-  .then(() => console.log('✅ MongoDB conectado'))
-  .catch(err => console.error('❌ Error MongoDB:', err));
+/* MULTI TENANT */
 
-// Rutas
+app.use(tenantMiddleware);
+
+/* RUTAS */
+
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/cobradores', require('./routes/cobradores'));
 app.use('/api/clientes', require('./routes/clientes'));
@@ -67,8 +39,23 @@ app.use('/api/prestamos', require('./routes/prestamos'));
 app.use('/api/pagos', require('./routes/pagos'));
 app.use('/api/inventario', require('./routes/inventario'));
 app.use('/api/dashboard', require('./routes/dashboard'));
+app.use('/api/sedes', require('./routes/sedes'));
+app.use('/api/dashboard-charts', require('./routes/dashboardCharts'));
 
-app.get('/', (req, res) => res.json({ message: 'API Gota a Gota funcionando ✅' }));
+/* TEST */
+
+app.get('/',(req,res)=>{
+  res.json({message:"API funcionando"});
+});
+
+/* MONGO */
+
+mongoose.connect(process.env.MONGODB_URI)
+.then(()=>console.log("MongoDB conectado"))
+.catch(err=>console.log(err));
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`🚀 Servidor corriendo en puerto ${PORT}`));
+
+app.listen(PORT,()=>{
+  console.log("Servidor corriendo en puerto",PORT);
+});
