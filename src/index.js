@@ -8,19 +8,39 @@ const jwt = require('jsonwebtoken');
 const app = express();
 
 /* =========================
+   NUEVO: ORÍGENES PERMITIDOS
+========================= */
+
+const allowedOrigins = [
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'http://localhost:3002',
+  'http://localhost:5173',
+  'https://super-admin-panel-amber.vercel.app'
+];
+
+/* =========================
    CORS
 ========================= */
 
 app.use(cors({
-  origin: [
-    'http://localhost:3000',
-    'http://localhost:3001',
-    'http://localhost:3002',
-    'http://localhost:5173'
-  ],
+  origin: function (origin, callback) {
+    // Permitir herramientas sin origin (Postman, curl, health checks, etc.)
+    if (!origin) return callback(null, true);
+
+    const isLocalAllowed = allowedOrigins.includes(origin);
+    const isVercelAllowed = origin.endsWith('.vercel.app');
+
+    if (isLocalAllowed || isVercelAllowed) {
+      return callback(null, true);
+    }
+
+    console.log(`❌ CORS bloqueado para origen: ${origin}`);
+    return callback(new Error(`CORS no permitido para origen: ${origin}`));
+  },
   credentials: true,
-  methods: ['GET','POST','PUT','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type','Authorization']
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 /* =========================
