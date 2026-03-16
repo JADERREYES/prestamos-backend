@@ -4,51 +4,62 @@ const Pago = require('../models/Pago');
 const Prestamo = require('../models/Prestamo');
 const { authMiddleware } = require('../middleware/auth');
 
-// GET pagos de un préstamo
-router.get('/prestamo/:prestamoId', authMiddleware, async (req, res) => {
+router.use((req, res, next) => {
+  if (!req.tenantId && req.user?.rol !== 'superadmin') {
+    return res.status(400).json({ error: 'Tenant no definido' });
+  }
+  next();
+});
+
+// Registrar un pago
+router.post('/', authMiddleware, async (req, res) => {
   try {
-    const pagos = await Pago.find({ prestamo: req.params.prestamoId })
-      .populate('cobrador', 'nombre')
-      .sort({ fechaPago: -1 });
-    res.json(pagos);
+    const { prestamoId, monto, fecha, metodo, observacion } = req.body;
+    
+    // Verificar que el préstamo existe y pertenece a la tenant
+    const prestamo = await Prestamo.findOne({ 
+      _id: prestamoId, 
+      tenantId: req.tenantId 
+    });
+    
+    if (!prestamo) {
+      return res.status(404).json({ error: 'Préstamo no encontrado' });
+    }
+    
+    const pago = new Pago({
+      prestamoId,
+      monto,
+      fecha: fecha || new Date(),
+      cobradorId: req.user.id,
+      tenantId: req.tenantId,
+      metodo: metodo || 'efectivo',
+      observacion
+    });
+    
+    await pago.save();
+    
+    // Actualizar total pagado del préstamo
+    prestamo.totalPagado = (prestamo.totalPagado || 0) + monto;
+    await prestamo.save();
+    
+    res.status(201).json(pago);
   } catch (err) {
+    console.error('❌ Error en POST /pagos:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// POST registrar pago
-router.post('/', authMiddleware, async (req, res) => {
+// Obtener pagos de un préstamo
+router.get('/prestamo/:prestamoId', authMiddleware, async (req, res) => {
   try {
-    const { prestamoId, monto, notas } = req.body;
+    const pagos = await Pago.find({ 
+      prestamoId: req.params.prestamoId,
+      tenantId: req.tenantId 
+    }).sort({ fecha: -1 });
     
-    const prestamo = await Prestamo.findById(prestamoId);
-    if (!prestamo) return res.status(404).json({ error: 'Préstamo no encontrado' });
-    if (prestamo.estado === 'pagado') return res.status(400).json({ error: 'Préstamo ya pagado' });
-
-    // Verificar que cobrador tiene acceso
-    if (req.user.rol === 'cobrador' && prestamo.cobrador.toString() !== req.user.id) {
-      return res.status(403).json({ error: 'No autorizado' });
-    }
-
-    const pago = new Pago({
-      prestamo: prestamoId,
-      cliente: prestamo.cliente,
-      cobrador: req.user.rol === 'cobrador' ? req.user.id : prestamo.cobrador,
-      monto,
-      notas
-    });
-    await pago.save();
-
-    // Actualizar préstamo
-    prestamo.totalPagado += monto;
-    if (prestamo.totalPagado >= prestamo.totalAPagar) {
-      prestamo.estado = 'pagado';
-      prestamo.totalPagado = prestamo.totalAPagar;
-    }
-    await prestamo.save();
-
-    res.status(201).json({ pago, prestamo });
+    res.json(pagos);
   } catch (err) {
+    console.error('❌ Error en GET /pagos/prestamo/:prestamoId:', err);
     res.status(500).json({ error: err.message });
   }
 });

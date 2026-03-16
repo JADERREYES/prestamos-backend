@@ -1,149 +1,150 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const jwt = require('jsonwebtoken');
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
 
-const Admin = require('../models/Admin');
-const Cobrador = require('../models/Cobrador');
+const Admin = require("../models/Admin");
+const Cobrador = require("../models/Cobrador");
 
-/* =========================
-   ADMIN LOGIN
-========================= */
-
-router.post('/admin/login', async (req, res) => {
+// ===== LOGIN PARA ADMIN (CORREGIDO CON BÚSQUEDA CASE-INSENSITIVE) =====
+router.post("/admin/login", async (req, res) => {
   try {
+    console.log('🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴');
+    console.log('🔴 FUNCIÓN DE LOGIN CORREGIDA');
+    console.log('🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴');
+    
+    const emailInput = req.body.email ? req.body.email.trim() : null;
+    const { password } = req.body;
 
-    const { email, password } = req.body;
+    console.log("🔑 Email original recibido:", emailInput);
+    console.log("🔑 Password recibido:", password);
 
-    const admin = await Admin.findOne({ email });
+    if (!emailInput || !password) {
+      return res.status(400).json({ error: "Email y contraseña requeridos" });
+    }
 
-    if (!admin)
-      return res.status(401).json({ error: 'Credenciales incorrectas' });
+    // BÚSQUEDA CASE-INSENSITIVE (no importa mayúsculas/minúsculas)
+    console.log('🔍 Buscando con búsqueda insensible a mayúsculas...');
+    const user = await Admin.findOne({ 
+      email: { $regex: new RegExp(`^${emailInput}$`, 'i') } 
+    }).lean();
+    
+    console.log('🔍 Resultado:', user ? '✅ Encontrado' : '❌ No encontrado');
+    
+    if (!user) {
+      console.log('❌ Usuario no encontrado');
+      
+      // Mostrar todos los emails para depuración
+      const todos = await Admin.find({}, 'email').lean();
+      console.log('📋 Emails en DB:', todos.map(u => u.email));
+      
+      return res.status(401).json({ error: "Credenciales incorrectas" });
+    }
 
-    const valid = await admin.comparePassword(password);
-
-    if (!valid)
-      return res.status(401).json({ error: 'Credenciales incorrectas' });
-
-    /* NUEVO: incluir tenantId en el token */
-
-    const token = jwt.sign({
-      id: admin._id,
-      tenantId: admin.tenantId,  // NUEVO
-      nombre: admin.nombre,
-      email: admin.email,
-      rol: 'admin'
-    },
-    process.env.JWT_SECRET,
-    { expiresIn: '7d' });
-
-    res.json({
-      token,
-      user: {
-        id: admin._id,
-        tenantId: admin.tenantId, // NUEVO
-        nombre: admin.nombre,
-        email: admin.email,
-        rol: 'admin'
-      }
+    console.log('✅ Usuario encontrado:', {
+      email: user.email,
+      rol: user.rol,
+      tenantId: user.tenantId
     });
 
-  } catch (err) {
+    // Verificar contraseña
+    const validPassword = await bcrypt.compare(password, user.password);
+    console.log('🔐 Contraseña válida?', validPassword);
 
-    res.status(500).json({ error: err.message });
+    if (!validPassword) {
+      return res.status(401).json({ error: "Credenciales incorrectas" });
+    }
 
+    // Generar token
+    const token = jwt.sign(
+      {
+        id: user._id,
+        email: user.email,
+        rol: user.rol,
+        tenantId: user.tenantId
+      },
+      process.env.JWT_SECRET || 'tu_secreto_temporal',
+      { expiresIn: '7d' }
+    );
+
+    console.log('✅ Login exitoso');
+    res.json({ 
+      token, 
+      user: { 
+        id: user._id, 
+        nombre: user.nombre, 
+        email: user.email, 
+        rol: user.rol, 
+        tenantId: user.tenantId 
+      } 
+    });
+
+  } catch (error) {
+    console.error('❌ Error:', error);
+    res.status(500).json({ error: "Error interno" });
   }
 });
 
-
-/* =========================
-   COBRADOR LOGIN
-========================= */
-
-router.post('/cobrador/login', async (req, res) => {
+// ===== LOGIN PARA COBRADOR =====
+router.post("/cobrador/login", async (req, res) => {
   try {
+    const emailInput = req.body.email ? req.body.email.trim() : null;
+    const { password } = req.body;
 
-    const { usuario, password } = req.body;
+    console.log("👤 Cobrador login intent - Email:", emailInput);
 
-    const cobrador = await Cobrador.findOne({
-      $or: [
-        { email: usuario },
-        { cedula: usuario }
-      ],
-      estado: 'activo'
-    });
+    if (!emailInput || !password) {
+      return res.status(400).json({ error: "Email y contraseña requeridos" });
+    }
 
-    if (!cobrador)
-      return res.status(401).json({ error: 'Credenciales incorrectas' });
+    const cobrador = await Cobrador.findOne({ 
+      email: { $regex: new RegExp(`^${emailInput}$`, 'i') } 
+    }).lean();
+    
+    if (!cobrador) {
+      console.log("❌ Cobrador no encontrado");
+      return res.status(401).json({ error: "Credenciales incorrectas" });
+    }
 
-    const valid = await cobrador.comparePassword(password);
+    const validPassword = await bcrypt.compare(password, cobrador.password);
 
-    if (!valid)
-      return res.status(401).json({ error: 'Credenciales incorrectas' });
+    if (!validPassword) {
+      console.log("❌ Contraseña incorrecta cobrador");
+      return res.status(401).json({ error: "Credenciales incorrectas" });
+    }
 
-    /* NUEVO: incluir tenantId */
+    if (cobrador.estado?.toLowerCase() !== "activo") {
+      return res.status(401).json({ error: "Cuenta de cobrador inactiva" });
+    }
 
-    const token = jwt.sign({
-      id: cobrador._id,
-      tenantId: cobrador.tenantId, // NUEVO
-      nombre: cobrador.nombre,
-      cedula: cobrador.cedula,
-      email: cobrador.email,
-      rol: 'cobrador'
-    },
-    process.env.JWT_SECRET,
-    { expiresIn: '7d' });
+    const token = jwt.sign(
+      {
+        id: cobrador._id,
+        email: cobrador.email,
+        rol: "cobrador",
+        tenantId: cobrador.tenantId,
+        nombre: cobrador.nombre
+      },
+      process.env.JWT_SECRET || 'tu_secreto_temporal',
+      { expiresIn: '7d' }
+    );
 
     res.json({
       token,
       user: {
         id: cobrador._id,
-        tenantId: cobrador.tenantId, // NUEVO
         nombre: cobrador.nombre,
-        cedula: cobrador.cedula,
         email: cobrador.email,
-        rol: 'cobrador'
+        rol: "cobrador",
+        tenantId: cobrador.tenantId,
+        telefono: cobrador.telefono
       }
     });
 
-  } catch (err) {
-
-    res.status(500).json({ error: err.message });
-
+  } catch (error) {
+    console.error("❌ Error en login cobrador:", error);
+    res.status(500).json({ error: "Error interno del servidor" });
   }
 });
-
-
-/* =========================
-   ADMIN SETUP
-========================= */
-
-router.post('/admin/setup', async (req, res) => {
-
-  try {
-
-    const count = await Admin.countDocuments();
-
-    if (count > 0)
-      return res.status(403).json({ error: 'Ya existe un admin' });
-
-    /* NUEVO: agregar tenantId al admin inicial */
-
-    const admin = new Admin({
-      ...req.body,
-      tenantId: "oficina_principal"
-    });
-
-    await admin.save();
-
-    res.json({ message: 'Admin creado exitosamente' });
-
-  } catch (err) {
-
-    res.status(500).json({ error: err.message });
-
-  }
-
-});
-
 
 module.exports = router;

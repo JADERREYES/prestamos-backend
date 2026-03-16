@@ -7,7 +7,7 @@ const cobradorSchema = new mongoose.Schema({
   tenantId: { 
     type: String,
     required: true,
-    index: true
+    lowercase: true
   },
 
   nombre:   { type: String, required: true },

@@ -9,10 +9,23 @@ const Sede = require('../models/Sede');
 
 const { authMiddleware, adminOnly } = require('../middleware/auth');
 
+// Middleware adicional para asegurar tenantId
+router.use((req, res, next) => {
+  if (!req.tenantId && req.user?.rol !== 'superadmin') {
+    return res.status(400).json({ error: 'Tenant no definido' });
+  }
+  next();
+});
+
 router.get('/', authMiddleware, adminOnly, async (req, res) => {
   try {
-
     const tenantId = req.tenantId;
+
+    if (!tenantId) {
+      return res.status(400).json({ error: "Tenant no definido" });
+    }
+
+    console.log('📊 Dashboard para tenant:', tenantId);
 
     const cobradores = await Cobrador.countDocuments({ estado: 'activo', tenantId });
     const clientes = await Cliente.countDocuments({ estado: 'activo', tenantId });
@@ -42,14 +55,11 @@ router.get('/', authMiddleware, adminOnly, async (req, res) => {
       .sort({ createdAt: -1 })
       .limit(5);
 
-    /* -------- NUEVO DASHBOARD POR SEDE -------- */
-
     const sedes = await Sede.find({ tenantId });
 
     const metricasSede = [];
 
     for (const sede of sedes) {
-
       const clientesSede = await Cliente.countDocuments({
         tenantId,
         sedeId: sede._id
@@ -62,34 +72,31 @@ router.get('/', authMiddleware, adminOnly, async (req, res) => {
       });
 
       const hoy = new Date();
-      hoy.setHours(0,0,0,0);
+      hoy.setHours(0, 0, 0, 0);
 
       const pagosHoy = await Pago.aggregate([
         {
-          $match:{
+          $match: {
             tenantId,
-            sedeId:sede._id,
-            createdAt:{ $gte:hoy }
+            sedeId: sede._id,
+            createdAt: { $gte: hoy }
           }
         },
         {
-          $group:{
-            _id:null,
-            total:{ $sum:"$monto" }
+          $group: {
+            _id: null,
+            total: { $sum: "$monto" }
           }
         }
       ]);
 
       metricasSede.push({
-        sede:sede.nombre,
-        clientes:clientesSede,
-        prestamos:prestamosSede,
-        cobrosHoy:pagosHoy[0]?.total || 0
+        sede: sede.nombre,
+        clientes: clientesSede,
+        prestamos: prestamosSede,
+        cobrosHoy: pagosHoy[0]?.total || 0
       });
-
     }
-
-    /* -------- RESPUESTA FINAL -------- */
 
     res.json({
       stats: {
@@ -106,9 +113,8 @@ router.get('/', authMiddleware, adminOnly, async (req, res) => {
     });
 
   } catch (err) {
-
+    console.error('❌ Error en dashboard:', err);
     res.status(500).json({ error: err.message });
-
   }
 });
 

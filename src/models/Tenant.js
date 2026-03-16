@@ -1,20 +1,36 @@
-const mongoose = require("mongoose");
+const mongoose = require('mongoose');
 
-const TenantSchema = new mongoose.Schema({
-
-  nombre:{
-    type:String,
-    required:true
+const tenantSchema = new mongoose.Schema({
+  nombre: {
+    type: String,
+    required: true
   },
-
-  direccion:String,
-  telefono:String,
-
-  estado:{
-    type:Boolean,
-    default:true
+  direccion: {
+    type: String,
+    default: ''
+  },
+  telefono: {
+    type: String,
+    default: ''
+  },
+  tenantId: {
+    type: String,
+    required: true,
+    unique: true
+  },
+  codigoEmpresa: {
+    type: String,
+    required: true,
+    unique: true
+  },
+  estado: {
+    type: Boolean,
+    default: true
+  },
+  fechaCreacion: {
+    type: Date,
+    default: Date.now
   }
+});
 
-},{timestamps:true});
-
-module.exports = mongoose.model("Tenant",TenantSchema);
+module.exports = mongoose.model('Tenant', tenantSchema);
