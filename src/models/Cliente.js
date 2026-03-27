@@ -1,16 +1,59 @@
 const mongoose = require('mongoose');
 
 const clienteSchema = new mongoose.Schema({
-  nombre: { type: String, required: true },
-  cedula: { type: String, required: true, unique: true },
-  celular: { type: String, required: true },
-  direccion: { type: String, required: true },
-  tipoCliente: { type: String, enum: ['nuevo', 'recurrente', 'moroso'], default: 'nuevo' },
-  cobrador: { type: mongoose.Schema.Types.ObjectId, ref: 'Cobrador', required: true },
-  estado: { type: String, enum: ['activo', 'inactivo'], default: 'activo' },
-  tenantId: { type: String, required: true, index: true }, // <--- AGREGADO
-  email: { type: String, default: '' }, // <--- AGREGADO (opcional)
-  telefono: { type: String, default: '' } // <--- AGREGADO (opcional)
-}, { timestamps: true });
+  nombre: {
+    type: String,
+    required: true
+  },
+  cedula: {
+    type: String,
+    required: true,
+    unique: true,
+    index: true
+  },
+  telefono: {
+    type: String,
+    required: true
+  },
+  direccion: {
+    type: String,
+    default: ''
+  },
+  email: {
+    type: String,
+    lowercase: true,
+    sparse: true
+  },
+  tipo: {
+    type: String,
+    enum: ['regular', 'vip', 'nuevo'],
+    default: 'regular'
+  },
+  cobrador: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Cobrador',
+    index: true
+  },
+  tenantId: {
+    type: String,
+    required: true,
+    index: true
+  },
+  notas: {
+    type: String,
+    default: ''
+  },
+  activo: {
+    type: Boolean,
+    default: true
+  }
+}, {
+  timestamps: true
+});
+
+// Índices para búsquedas rápidas
+clienteSchema.index({ nombre: 1, tenantId: 1 });
+clienteSchema.index({ cedula: 1, tenantId: 1 }, { unique: true });
+clienteSchema.index({ cobrador: 1 });
 
 module.exports = mongoose.model('Cliente', clienteSchema);

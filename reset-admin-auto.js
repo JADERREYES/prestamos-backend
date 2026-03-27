@@ -9,23 +9,21 @@ async function resetAdmin() {
 
     const db = mongoose.connection.db;
     
-    // Resetear contraseña para todos los admins del tenant cali22_b5j1
     const newPassword = 'Admin123!';
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     
-    const result = await db.collection('admins').updateMany(
-      { tenantId: 'cali22_b5j1' },
+    // Resetear solo el admin de cali22_b5j1
+    const result = await db.collection('admins').updateOne(
+      { email: 'admin@cali22_b5j1.com' },
       { $set: { password: hashedPassword } }
     );
     
-    console.log(`✅ ${result.modifiedCount} administradores actualizados`);
-    
-    // Mostrar credenciales
-    const admins = await db.collection('admins').find({ tenantId: 'cali22_b5j1' }).toArray();
-    console.log('\n📋 CREDENCIALES:');
-    admins.forEach(a => {
-      console.log(`   ${a.email} / ${newPassword}`);
-    });
+    if (result.modifiedCount > 0) {
+      console.log('✅ Contraseña actualizada para admin@cali22_b5j1.com');
+      console.log(`🔑 Nueva contraseña: ${newPassword}\n`);
+    } else {
+      console.log('⚠️ No se actualizó nada');
+    }
     
     process.exit(0);
   } catch (error) {

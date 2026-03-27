@@ -2,118 +2,78 @@ const jwt = require('jsonwebtoken');
 
 const tenantMiddleware = async (req, res, next) => {
   try {
-
     console.log("🔍 Tenant Middleware - Path:", req.path);
+    console.log("🔍 Headers:", req.headers);
 
+    // Rutas públicas que no requieren tenantId
     const rutasPublicas = [
       '/api/auth/',
       '/api/superadmin/',
-      '/api/test'
+      '/api/test',
+      '/api/pagos/pendientes',
+      '/api/pagos/recordatorio',
+      '/api/pagos/mensuales-pendientes'
     ];
 
-    const esRutaPublica = rutasPublicas.some(ruta =>
-      req.path.startsWith(ruta)
-    );
+    const esRutaPublica = rutasPublicas.some(ruta => req.path.startsWith(ruta));
 
     const token = req.headers.authorization?.split(' ')[1];
-
-    /* =========================
-       RUTAS PUBLICAS
-    ========================= */
-
+    
+    // Si es ruta pública, continuar
     if (esRutaPublica) {
-
       console.log(`🔓 Ruta pública: ${req.path}`);
-
       if (token) {
         try {
-
-          const decoded = jwt.verify(
-            token,
-            process.env.JWT_SECRET || 'tu_secreto_temporal'
-          );
-
+          const decoded = jwt.verify(token, process.env.JWT_SECRET || 'tu_secreto_temporal');
           req.user = decoded;
-
           if (decoded.tenantId) {
             req.tenantId = decoded.tenantId.toLowerCase().trim();
           }
-
-          console.log(
-            "👤 Usuario en ruta pública:",
-            decoded.email,
-            "Rol:",
-            decoded.rol,
-            "TenantId:",
-            req.tenantId
-          );
-
         } catch (err) {
           console.log("⚠️ Token inválido en ruta pública");
         }
       }
-
       return next();
     }
 
-    /* =========================
-       RUTAS PRIVADAS
-    ========================= */
-
+    // Para rutas privadas, verificar token
     if (!token) {
-      return res.status(401).json({
-        error: "Token no proporcionado"
-      });
+      console.log("❌ No hay token");
+      return res.status(401).json({ error: "Token no proporcionado" });
     }
 
-    const decoded = jwt.verify(
-      token,
-      process.env.JWT_SECRET || 'tu_secreto_temporal'
-    );
-
+    // Decodificar token con manejo de errores
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET || 'tu_secreto_temporal');
+    } catch (err) {
+      console.log("❌ Token inválido:", err.message);
+      return res.status(401).json({ error: "Token inválido" });
+    }
+    
     req.user = decoded;
+    console.log(`✅ Token verificado: ${decoded.email} (${decoded.rol})`);
 
-    console.log(
-      "✅ Token verificado:",
-      decoded.email,
-      "Rol:",
-      decoded.rol,
-      "TenantId:",
-      decoded.tenantId
-    );
-
-    if (
-      decoded.rol === 'superadmin' ||
-      decoded.rol === 'superadministrador'
-    ) {
+    // Super Admin puede pasar sin tenantId
+    if (decoded.rol === 'superadmin' || decoded.rol === 'superadministrador') {
       console.log('👑 Super Admin detectado');
       return next();
     }
 
+    // Para admin y cobrador, verificar tenantId
     if (!decoded.tenantId) {
-      return res.status(400).json({
-        error: 'TenantId no presente en el token'
-      });
+      console.log("❌ No hay tenantId en el token");
+      return res.status(400).json({ error: 'TenantId no presente en el token' });
     }
 
-    /* NORMALIZAR TENANT */
-
+    // Establecer tenantId
     req.tenantId = decoded.tenantId.toLowerCase().trim();
-
-    console.log(
-      `✅ Tenant ID establecido: ${req.tenantId} para usuario: ${decoded.email}`
-    );
+    console.log(`✅ Tenant ID establecido: ${req.tenantId} para usuario: ${decoded.email} (${decoded.rol})`);
 
     next();
-
   } catch (error) {
-
     console.error('❌ Error en tenant middleware:', error);
-
-    return res.status(401).json({
-      error: 'Token inválido'
-    });
-
+    return res.status(500).json({ error: 'Error interno del servidor' });
   }
 };
 

@@ -1,14 +1,13 @@
-const express = require("express");
+const express = require('express');
 const router = express.Router();
-const bcrypt = require("bcryptjs");
+const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
-const Tenant = require("../models/Tenant");
-const Admin = require("../models/Admin");
-const Cobrador = require("../models/Cobrador");
-const Cliente = require("../models/Cliente");
-const Prestamo = require("../models/Prestamo");
-const superadminController = require('../controllers/superadmin.controller');
+const Tenant = require('../models/Tenant');
+const Admin = require('../models/Admin');
+const Cobrador = require('../models/Cobrador');
+const Cliente = require('../models/Cliente');
+const Prestamo = require('../models/Prestamo');
 
 const { 
   generarPassword, 
@@ -16,11 +15,9 @@ const {
   generarEmailAdmin,
   generarEmailCobrador,
   generarCodigoEmpresa
-} = require("../utils/generarCredenciales");
+} = require('../utils/generarCredenciales');
 
-/* =========================
-   NUEVO: normalizador de tenantId
-========================= */
+// Normalizador de tenantId
 const normalizarTenantId = (valor) => {
   return String(valor || "")
     .trim()
@@ -32,37 +29,25 @@ const normalizarTenantId = (valor) => {
 // Middleware para verificar token y rol de Super Admin
 const isSuperAdmin = async (req, res, next) => {
   try {
-    // Obtener token del header
     const token = req.headers.authorization?.split(' ')[1];
     
     if (!token) {
-      console.log("❌ Token no proporcionado");
       return res.status(401).json({ error: "Token no proporcionado" });
     }
 
-    // Verificar token
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'tu_secreto_temporal');
-    console.log("✅ Token verificado:", decoded.email);
-    
-    // Buscar usuario en la base de datos
     const user = await Admin.findById(decoded.id);
     
     if (!user) {
-      console.log("❌ Usuario no encontrado:", decoded.id);
       return res.status(401).json({ error: "Usuario no encontrado" });
     }
 
-    // Verificar que sea superadmin (acepta ambas variantes)
     if (user.rol !== "superadmin" && user.rol !== "superadministrador") {
-      console.log(`❌ Usuario no es superadmin. Rol: ${user.rol}`);
       return res.status(403).json({ error: "No autorizado - Se requiere rol de Super Admin" });
     }
 
-    console.log(`✅ Super Admin autorizado: ${user.email}`);
-    // Adjuntar usuario a la request
     req.user = user;
     next();
-
   } catch (error) {
     console.error("Error en middleware superadmin:", error);
     if (error.name === 'JsonWebTokenError') {
@@ -75,19 +60,6 @@ const isSuperAdmin = async (req, res, next) => {
   }
 };
 
-// ============ RUTAS DEL CONTROLADOR (sin middleware) ============
-
-// Ruta para obtener todas las empresas (oficinas)
-router.get('/tenants', superadminController.listarTenants);
-
-// Ruta para crear una nueva empresa (oficina)
-router.post('/tenants', superadminController.crearTenant);
-
-// Ruta para el dashboard inicial del superadmin
-router.get('/dashboard-stats', superadminController.obtenerEstadisticas);
-
-// ============ RUTAS PROTEGIDAS CON MIDDLEWARE ============
-
 // Obtener estadísticas globales
 router.get("/stats", isSuperAdmin, async (req, res) => {
   try {
@@ -98,17 +70,13 @@ router.get("/stats", isSuperAdmin, async (req, res) => {
     const cobradores = await Cobrador.countDocuments();
     const prestamos = await Prestamo.countDocuments();
 
-    // Calcular préstamos por estado
     const prestamosActivos = await Prestamo.countDocuments({ estado: "activo" });
     const prestamosPagados = await Prestamo.countDocuments({ estado: "pagado" });
     const prestamosVencidos = await Prestamo.countDocuments({ estado: "vencido" });
 
-    // Calcular cartera total
     let carteraTotal = 0;
     const prestamosActivosList = await Prestamo.find({ estado: "activo" });
     carteraTotal = prestamosActivosList.reduce((sum, p) => sum + (p.totalAPagar - (p.totalPagado || 0)), 0);
-
-    console.log(`📊 Estadísticas: ${oficinas} oficinas, ${clientes} clientes, ${cobradores} cobradores, ${prestamos} préstamos`);
 
     res.json({
       oficinas,
@@ -126,20 +94,15 @@ router.get("/stats", isSuperAdmin, async (req, res) => {
   }
 });
 
-// Crear oficina - VERSIÓN CORREGIDA (sin doble hasheo)
+// Crear oficina
 router.post("/crear-oficina", isSuperAdmin, async (req, res) => {
   try {
     const { nombre, direccion, telefono } = req.body;
-
-    console.log("🏗 Creando oficina:", nombre);
 
     if (!nombre) {
       return res.status(400).json({ error: "El nombre es requerido" });
     }
 
-    /* =========================
-       NUEVO: generar y normalizar tenantId
-    ========================= */
     const tenantGenerado = generarTenant(nombre);
     const tenantId = normalizarTenantId(tenantGenerado);
 
@@ -162,19 +125,13 @@ router.post("/crear-oficina", isSuperAdmin, async (req, res) => {
     });
 
     await tenant.save();
-    console.log(`✅ Tenant creado: ${tenantId}`);
 
-    // Generar credenciales
     const adminPassword = generarPassword();
     const cobradorPassword = generarPassword();
 
     const adminEmail = generarEmailAdmin(tenantId).toLowerCase();
     const cobradorEmail = generarEmailCobrador(tenantId).toLowerCase();
 
-    console.log(`📧 Credenciales admin: ${adminEmail} / ${adminPassword}`);
-    console.log(`📧 Credenciales cobrador: ${cobradorEmail} / ${cobradorPassword}`);
-
-    // Crear admin (con password SIN hashear - el modelo lo hará)
     const nuevoAdmin = new Admin({
       nombre: "Administrador",
       email: adminEmail,
@@ -183,9 +140,7 @@ router.post("/crear-oficina", isSuperAdmin, async (req, res) => {
       tenantId
     });
     await nuevoAdmin.save();
-    console.log(`✅ Admin creado: ${adminEmail}`);
 
-    // Crear cobrador (con password SIN hashear - el modelo lo hará)
     const nuevoCobrador = new Cobrador({
       nombre: "Cobrador Principal",
       email: cobradorEmail,
@@ -195,16 +150,6 @@ router.post("/crear-oficina", isSuperAdmin, async (req, res) => {
       tenantId
     });
     await nuevoCobrador.save();
-    console.log(`✅ Cobrador creado: ${cobradorEmail}`);
-
-    // Verificación opcional
-    const adminVerificado = await Admin.findById(nuevoAdmin._id).lean();
-    const passwordFunciona = await bcrypt.compare(adminPassword, adminVerificado.password);
-    if (!passwordFunciona) {
-      console.error("⚠️ ERROR CRÍTICO: La contraseña del admin no se guardó correctamente");
-    } else {
-      console.log("✅ Contraseña de admin verificada correctamente");
-    }
 
     res.json({
       mensaje: "Oficina creada exitosamente",
@@ -232,9 +177,7 @@ router.post("/crear-oficina", isSuperAdmin, async (req, res) => {
 // Obtener todas las oficinas
 router.get("/oficinas", isSuperAdmin, async (req, res) => {
   try {
-    console.log("🏢 Obteniendo todas las oficinas");
     const oficinas = await Tenant.find().sort({ fechaCreacion: -1 });
-    console.log(`📋 Encontradas ${oficinas.length} oficinas`);
     res.json(oficinas);
   } catch (err) {
     console.error("Error en oficinas:", err);
@@ -245,8 +188,6 @@ router.get("/oficinas", isSuperAdmin, async (req, res) => {
 // Cambiar estado de oficina
 router.put("/oficinas/:id", isSuperAdmin, async (req, res) => {
   try {
-    console.log("🔄 Cambiando estado de oficina:", req.params.id);
-    
     const tenant = await Tenant.findById(req.params.id);
     if (!tenant) {
       return res.status(404).json({ error: "Oficina no encontrada" });
@@ -255,8 +196,6 @@ router.put("/oficinas/:id", isSuperAdmin, async (req, res) => {
     tenant.estado = !tenant.estado;
     await tenant.save();
     
-    console.log(`✅ Oficina ${tenant.nombre} ahora está ${tenant.estado ? "ACTIVA" : "INACTIVA"}`);
-
     res.json(tenant);
   } catch (err) {
     console.error("Error cambiando estado:", err);
@@ -267,37 +206,21 @@ router.put("/oficinas/:id", isSuperAdmin, async (req, res) => {
 // Eliminar oficina
 router.delete("/oficinas/:id", isSuperAdmin, async (req, res) => {
   try {
-    console.log("🗑 Eliminando oficina:", req.params.id);
-    
     const tenant = await Tenant.findById(req.params.id);
     if (!tenant) {
       return res.status(404).json({ error: "Oficina no encontrada" });
     }
 
-    /* =========================
-       NUEVO: asegurar tenant normalizado
-    ========================= */
     const tenantIdNormalizado = normalizarTenantId(tenant.tenantId);
 
-    console.log(`📦 Eliminando datos para tenant: ${tenantIdNormalizado}`);
-
-    // Eliminar todos los datos relacionados
-    const adminsDeleted = await Admin.deleteMany({ tenantId: tenantIdNormalizado });
-    const cobradoresDeleted = await Cobrador.deleteMany({ tenantId: tenantIdNormalizado });
-    const clientesDeleted = await Cliente.deleteMany({ tenantId: tenantIdNormalizado });
-    const prestamosDeleted = await Prestamo.deleteMany({ tenantId: tenantIdNormalizado });
+    await Admin.deleteMany({ tenantId: tenantIdNormalizado });
+    await Cobrador.deleteMany({ tenantId: tenantIdNormalizado });
+    await Cliente.deleteMany({ tenantId: tenantIdNormalizado });
+    await Prestamo.deleteMany({ tenantId: tenantIdNormalizado });
     await Tenant.findByIdAndDelete(req.params.id);
 
-    console.log(`✅ Eliminados: ${adminsDeleted.deletedCount} admins, ${cobradoresDeleted.deletedCount} cobradores, ${clientesDeleted.deletedCount} clientes, ${prestamosDeleted.deletedCount} préstamos`);
-
     res.json({ 
-      mensaje: "Oficina y todos sus datos eliminados correctamente",
-      stats: {
-        admins: adminsDeleted.deletedCount,
-        cobradores: cobradoresDeleted.deletedCount,
-        clientes: clientesDeleted.deletedCount,
-        prestamos: prestamosDeleted.deletedCount
-      }
+      mensaje: "Oficina y todos sus datos eliminados correctamente"
     });
   } catch (err) {
     console.error("Error eliminando oficina:", err);
@@ -308,8 +231,6 @@ router.delete("/oficinas/:id", isSuperAdmin, async (req, res) => {
 // Obtener detalles de una oficina específica
 router.get("/oficinas/:id/detalle", isSuperAdmin, async (req, res) => {
   try {
-    console.log("🔍 Obteniendo detalle de oficina:", req.params.id);
-    
     const tenant = await Tenant.findById(req.params.id);
     if (!tenant) {
       return res.status(404).json({ error: "Oficina no encontrada" });
@@ -322,7 +243,6 @@ router.get("/oficinas/:id/detalle", isSuperAdmin, async (req, res) => {
     const clientes = await Cliente.find({ tenantId: tenantIdNormalizado });
     const prestamos = await Prestamo.find({ tenantId: tenantIdNormalizado });
 
-    // Calcular estadísticas de la oficina
     const totalPrestamos = prestamos.length;
     const prestamosActivos = prestamos.filter(p => p.estado === "activo").length;
     const totalRecaudado = prestamos.reduce((sum, p) => sum + (p.totalPagado || 0), 0);
@@ -346,15 +266,6 @@ router.get("/oficinas/:id/detalle", isSuperAdmin, async (req, res) => {
     console.error("Error obteniendo detalle:", err);
     res.status(500).json({ error: err.message });
   }
-});
-
-// Ruta de prueba (SIN middleware)
-router.get("/test", (req, res) => {
-  res.json({ 
-    mensaje: "Ruta de superadmin funcionando",
-    headers: req.headers,
-    user: req.user || null
-  });
 });
 
 module.exports = router;

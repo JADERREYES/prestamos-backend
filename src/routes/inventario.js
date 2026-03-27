@@ -1,27 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const { authMiddleware, adminOnly } = require('../middleware/auth');
+const Inventario = require('../models/Inventario');
 
-// Modelo de inventario (si no existe, créalo)
-let Inventario;
-try {
-  Inventario = require('../models/Inventario');
-} catch (e) {
-  // Si el modelo no existe, usar un esquema temporal
-  const mongoose = require('mongoose');
-  const inventarioSchema = new mongoose.Schema({
-    nombre: { type: String, required: true },
-    descripcion: String,
-    cantidad: { type: Number, default: 0 },
-    precio: Number,
-    categoria: String,
-    tenantId: { type: String, required: true, index: true },
-    estado: { type: String, default: 'activo' }
-  }, { timestamps: true });
-  
-  Inventario = mongoose.model('Inventario', inventarioSchema);
-}
-
+// Middleware para verificar tenantId
 router.use((req, res, next) => {
   if (!req.tenantId && req.user?.rol !== 'superadmin') {
     return res.status(400).json({ error: 'Tenant no definido' });
@@ -29,24 +11,38 @@ router.use((req, res, next) => {
   next();
 });
 
-// GET todos los items
+// GET todos los items del inventario
 router.get('/', authMiddleware, adminOnly, async (req, res) => {
   try {
-    const { search, categoria } = req.query;
+    const { search, cobrador, estado, tipo } = req.query;
     let query = { tenantId: req.tenantId };
     
     if (search) {
       query.$or = [
-        { nombre: { $regex: search, $options: 'i' } },
-        { descripcion: { $regex: search, $options: 'i' } }
+        { tipo: { $regex: search, $options: 'i' } },
+        { descripcion: { $regex: search, $options: 'i' } },
+        { serie: { $regex: search, $options: 'i' } },
+        { marca: { $regex: search, $options: 'i' } },
+        { modelo: { $regex: search, $options: 'i' } }
       ];
     }
     
-    if (categoria) {
-      query.categoria = categoria;
+    if (cobrador && cobrador !== '') {
+      query.cobrador = cobrador;
     }
     
-    const items = await Inventario.find(query).sort({ createdAt: -1 });
+    if (estado && estado !== '') {
+      query.estado = estado;
+    }
+    
+    if (tipo && tipo !== '') {
+      query.tipo = { $regex: tipo, $options: 'i' };
+    }
+    
+    const items = await Inventario.find(query)
+      .populate('cobrador', 'nombre cedula email telefono')
+      .sort({ createdAt: -1 });
+    
     res.json(items);
   } catch (err) {
     console.error('❌ Error en GET /inventario:', err);
@@ -60,7 +56,7 @@ router.get('/:id', authMiddleware, adminOnly, async (req, res) => {
     const item = await Inventario.findOne({ 
       _id: req.params.id, 
       tenantId: req.tenantId 
-    });
+    }).populate('cobrador', 'nombre cedula email telefono');
     
     if (!item) {
       return res.status(404).json({ error: 'Item no encontrado' });
@@ -76,13 +72,25 @@ router.get('/:id', authMiddleware, adminOnly, async (req, res) => {
 // POST crear item
 router.post('/', authMiddleware, adminOnly, async (req, res) => {
   try {
+    const { tipo, descripcion, serie, cobrador, estado, marca, modelo, valor, notas } = req.body;
+    
     const item = new Inventario({
-      ...req.body,
+      tipo,
+      descripcion,
+      serie: serie || '',
+      cobrador: cobrador || null,
+      estado: cobrador ? 'asignado' : (estado || 'disponible'),
+      marca: marca || '',
+      modelo: modelo || '',
+      valor: valor || 0,
+      notas: notas || '',
       tenantId: req.tenantId
     });
     
     await item.save();
-    res.status(201).json(item);
+    const populatedItem = await Inventario.findById(item._id).populate('cobrador', 'nombre cedula email');
+    
+    res.status(201).json(populatedItem);
   } catch (err) {
     console.error('❌ Error en POST /inventario:', err);
     res.status(500).json({ error: err.message });
@@ -92,17 +100,47 @@ router.post('/', authMiddleware, adminOnly, async (req, res) => {
 // PUT actualizar item
 router.put('/:id', authMiddleware, adminOnly, async (req, res) => {
   try {
-    const item = await Inventario.findOneAndUpdate(
-      { _id: req.params.id, tenantId: req.tenantId },
-      req.body,
-      { new: true }
-    );
+    const { tipo, descripcion, serie, cobrador, estado, marca, modelo, valor, notas } = req.body;
+    
+    const item = await Inventario.findOne({ 
+      _id: req.params.id, 
+      tenantId: req.tenantId 
+    });
     
     if (!item) {
       return res.status(404).json({ error: 'Item no encontrado' });
     }
     
-    res.json(item);
+    // Actualizar campos
+    if (tipo) item.tipo = tipo;
+    if (descripcion) item.descripcion = descripcion;
+    if (serie !== undefined) item.serie = serie;
+    if (marca !== undefined) item.marca = marca;
+    if (modelo !== undefined) item.modelo = modelo;
+    if (valor !== undefined) item.valor = valor;
+    if (notas !== undefined) item.notas = notas;
+    
+    // Manejar asignación a cobrador
+    const cobradorAnterior = item.cobrador ? item.cobrador.toString() : null;
+    const cobradorNuevo = cobrador || null;
+    
+    if (cobradorNuevo !== cobradorAnterior) {
+      item.cobrador = cobradorNuevo;
+      if (cobradorNuevo) {
+        item.fechaAsignacion = new Date();
+        item.estado = 'asignado';
+      } else {
+        item.fechaAsignacion = null;
+        item.estado = estado || 'disponible';
+      }
+    } else if (estado && !cobradorNuevo) {
+      item.estado = estado;
+    }
+    
+    await item.save();
+    const populatedItem = await Inventario.findById(item._id).populate('cobrador', 'nombre cedula email');
+    
+    res.json(populatedItem);
   } catch (err) {
     console.error('❌ Error en PUT /inventario/:id:', err);
     res.status(500).json({ error: err.message });
@@ -124,6 +162,38 @@ router.delete('/:id', authMiddleware, adminOnly, async (req, res) => {
     res.json({ message: 'Item eliminado correctamente' });
   } catch (err) {
     console.error('❌ Error en DELETE /inventario/:id:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET estadísticas de inventario
+router.get('/stats/resumen', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const tenantId = req.tenantId;
+    
+    const total = await Inventario.countDocuments({ tenantId });
+    const disponibles = await Inventario.countDocuments({ tenantId, estado: 'disponible' });
+    const asignados = await Inventario.countDocuments({ tenantId, estado: 'asignado' });
+    const mantenimiento = await Inventario.countDocuments({ tenantId, estado: 'mantenimiento' });
+    
+    // Items por cobrador
+    const porCobrador = await Inventario.aggregate([
+      { $match: { tenantId, cobrador: { $ne: null } } },
+      { $group: { _id: '$cobrador', count: { $sum: 1 } } },
+      { $lookup: { from: 'cobradors', localField: '_id', foreignField: '_id', as: 'cobradorInfo' } },
+      { $unwind: { path: '$cobradorInfo', preserveNullAndEmptyArrays: true } },
+      { $project: { nombre: '$cobradorInfo.nombre', count: 1 } }
+    ]);
+    
+    res.json({
+      total,
+      disponibles,
+      asignados,
+      mantenimiento,
+      porCobrador
+    });
+  } catch (err) {
+    console.error('❌ Error en GET /inventario/stats/resumen:', err);
     res.status(500).json({ error: err.message });
   }
 });

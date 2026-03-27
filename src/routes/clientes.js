@@ -1,116 +1,163 @@
 const express = require('express');
 const router = express.Router();
 const Cliente = require('../models/Cliente');
-const { authMiddleware, adminOnly } = require('../middleware/auth');
 
-// Middleware para verificar tenantId
-router.use((req, res, next) => {
-  if (!req.tenantId && req.user?.rol !== 'superadmin') {
-    return res.status(400).json({ error: 'Tenant no definido' });
-  }
-  next();
-});
-
-// GET clientes - admin ve todos, cobrador ve los suyos
-router.get('/', authMiddleware, async (req, res) => {
+// GET - Obtener todos los clientes (filtra según rol)
+router.get('/', async (req, res) => {
   try {
-    const { search } = req.query;
     const tenantId = req.tenantId;
+    const user = req.user;
+    const { search } = req.query;
     
-    let query = { tenantId };
+    console.log(`📋 Obteniendo clientes para tenant: ${tenantId}, usuario: ${user.email} (${user.rol})`);
     
-    if (req.user.rol === 'cobrador') {
-      query.cobrador = req.user.id;
+    let query = { tenantId, activo: true };
+    
+    // Si es cobrador, solo ver sus clientes (los que él creó o le asignaron)
+    if (user.rol === 'cobrador') {
+      query.cobrador = user.id;
+      console.log(`🔍 Cobrador ${user.email} filtra por sus clientes`);
     }
     
     if (search) {
       query.$or = [
         { nombre: { $regex: search, $options: 'i' } },
         { cedula: { $regex: search, $options: 'i' } },
-        { celular: { $regex: search, $options: 'i' } }
+        { telefono: { $regex: search, $options: 'i' } }
       ];
     }
     
-    const clientes = await Cliente.find(query).populate('cobrador', 'nombre cedula');
+    const clientes = await Cliente.find(query)
+      .populate('cobrador', 'nombre email')
+      .sort({ createdAt: -1 });
+    
+    console.log(`✅ Encontrados ${clientes.length} clientes para ${user.email}`);
     res.json(clientes);
-  } catch (err) {
-    console.error('❌ Error en GET /clientes:', err);
-    res.status(500).json({ error: err.message });
+  } catch (error) {
+    console.error('❌ Error al obtener clientes:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 
-// GET cliente por ID
-router.get('/:id', authMiddleware, async (req, res) => {
+// GET - Obtener un cliente por ID
+router.get('/:id', async (req, res) => {
   try {
-    const cliente = await Cliente.findOne({ 
-      _id: req.params.id, 
-      tenantId: req.tenantId 
-    }).populate('cobrador', 'nombre cedula');
+    const tenantId = req.tenantId;
+    const user = req.user;
+    const { id } = req.params;
     
-    if (!cliente) return res.status(404).json({ error: 'Cliente no encontrado' });
-    res.json(cliente);
-  } catch (err) {
-    console.error('❌ Error en GET /clientes/:id:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// POST crear cliente
-router.post('/', authMiddleware, async (req, res) => {
-  try {
-    const data = { ...req.body, tenantId: req.tenantId };
+    let query = { _id: id, tenantId, activo: true };
     
-    // Si es cobrador, asignarse como cobrador
-    if (req.user.rol === 'cobrador') {
-      data.cobrador = req.user.id;
+    // Si es cobrador, solo puede ver sus clientes
+    if (user.rol === 'cobrador') {
+      query.cobrador = user.id;
     }
     
-    // Verificar si ya existe un cliente con la misma cédula en esta tenant
-    const existe = await Cliente.findOne({ 
-      cedula: data.cedula, 
-      tenantId: req.tenantId 
-    });
-    
-    if (existe) {
-      return res.status(400).json({ error: 'Ya existe un cliente con esta cédula' });
-    }
-    
-    const cliente = new Cliente(data);
-    await cliente.save();
-    const populated = await cliente.populate('cobrador', 'nombre cedula');
-    res.status(201).json(populated);
-  } catch (err) {
-    console.error('❌ Error en POST /clientes:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// PUT actualizar cliente
-router.put('/:id', authMiddleware, async (req, res) => {
-  try {
-    const cliente = await Cliente.findOneAndUpdate(
-      { _id: req.params.id, tenantId: req.tenantId },
-      req.body,
-      { new: true }
-    ).populate('cobrador', 'nombre cedula');
+    const cliente = await Cliente.findOne(query).populate('cobrador', 'nombre email');
     
     if (!cliente) {
       return res.status(404).json({ error: 'Cliente no encontrado' });
     }
     
     res.json(cliente);
-  } catch (err) {
-    console.error('❌ Error en PUT /clientes/:id:', err);
-    res.status(500).json({ error: err.message });
+  } catch (error) {
+    console.error('❌ Error al obtener cliente:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 
-// DELETE cliente
-router.delete('/:id', authMiddleware, adminOnly, async (req, res) => {
+// POST - Crear cliente (admin y cobrador pueden)
+router.post('/', async (req, res) => {
   try {
+    const tenantId = req.tenantId;
+    const user = req.user;
+    const { nombre, cedula, telefono, direccion, email, tipo } = req.body;
+    
+    console.log(`📝 Creando cliente: ${nombre} por ${user.email} (${user.rol})`);
+    
+    if (!nombre || !cedula || !telefono) {
+      return res.status(400).json({ error: 'Nombre, cédula y teléfono son requeridos' });
+    }
+    
+    // Verificar si ya existe un cliente con la misma cédula en este tenant
+    const existe = await Cliente.findOne({ cedula, tenantId });
+    if (existe) {
+      return res.status(400).json({ error: 'Ya existe un cliente con esta cédula' });
+    }
+    
+    // Crear cliente
+    const cliente = new Cliente({
+      nombre,
+      cedula,
+      telefono,
+      direccion: direccion || '',
+      email: email || '',
+      tipo: tipo || 'regular',
+      tenantId,
+      activo: true,
+      // Si es cobrador, se asigna a sí mismo; si es admin, puede quedar sin cobrador
+      cobrador: user.rol === 'cobrador' ? user.id : null
+    });
+    
+    await cliente.save();
+    
+    const clientePopulado = await cliente.populate('cobrador', 'nombre email');
+    console.log(`✅ Cliente creado por ${user.email}`);
+    res.status(201).json(clientePopulado);
+  } catch (error) {
+    console.error('❌ Error al crear cliente:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PUT - Actualizar cliente
+router.put('/:id', async (req, res) => {
+  try {
+    const tenantId = req.tenantId;
+    const user = req.user;
+    const { nombre, telefono, direccion, email, tipo, activo } = req.body;
+    
+    let query = { _id: req.params.id, tenantId };
+    
+    // Si es cobrador, solo puede editar sus clientes
+    if (user.rol === 'cobrador') {
+      query.cobrador = user.id;
+    }
+    
     const cliente = await Cliente.findOneAndUpdate(
-      { _id: req.params.id, tenantId: req.tenantId },
-      { estado: 'inactivo' },
+      query,
+      { nombre, telefono, direccion, email, tipo, activo },
+      { new: true }
+    ).populate('cobrador', 'nombre email');
+    
+    if (!cliente) {
+      return res.status(404).json({ error: 'Cliente no encontrado' });
+    }
+    
+    console.log(`✅ Cliente actualizado por ${user.email}`);
+    res.json(cliente);
+  } catch (error) {
+    console.error('❌ Error al actualizar cliente:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE - Eliminar cliente (soft delete)
+router.delete('/:id', async (req, res) => {
+  try {
+    const tenantId = req.tenantId;
+    const user = req.user;
+    
+    let query = { _id: req.params.id, tenantId };
+    
+    // Si es cobrador, solo puede eliminar sus clientes
+    if (user.rol === 'cobrador') {
+      query.cobrador = user.id;
+    }
+    
+    const cliente = await Cliente.findOneAndUpdate(
+      query,
+      { activo: false },
       { new: true }
     );
     
@@ -118,10 +165,11 @@ router.delete('/:id', authMiddleware, adminOnly, async (req, res) => {
       return res.status(404).json({ error: 'Cliente no encontrado' });
     }
     
-    res.json({ message: 'Cliente desactivado' });
-  } catch (err) {
-    console.error('❌ Error en DELETE /clientes/:id:', err);
-    res.status(500).json({ error: err.message });
+    console.log(`✅ Cliente desactivado por ${user.email}`);
+    res.json({ message: 'Cliente desactivado correctamente' });
+  } catch (error) {
+    console.error('❌ Error al eliminar cliente:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 

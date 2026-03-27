@@ -42,14 +42,38 @@ async function fixPassword() {
     
     // Verificar admin
     const admin = await db.collection('admins').findOne({ email: 'admin@popayan23_khpq.com' });
-    const adminValid = await bcrypt.compare(adminPassword, admin.password);
-    console.log(`🔐 Verificación Admin: ${adminValid ? '✅ Funciona' : '❌ No funciona'}`);
+    if (admin) {
+      const adminValid = await bcrypt.compare(adminPassword, admin.password);
+      console.log(`🔐 Verificación Admin: ${adminValid ? '✅ Funciona' : '❌ No funciona'}`);
+    } else {
+      console.log('❌ Admin no encontrado, creándolo...');
+      await db.collection('admins').insertOne({
+        nombre: 'Administrador',
+        email: 'admin@popayan23_khpq.com',
+        password: hashedAdmin,
+        rol: 'admin',
+        tenantId: 'popayan23_khpq'
+      });
+      console.log('✅ Admin creado');
+    }
     
     // Verificar cobrador
     const cobrador = await db.collection('cobradors').findOne({ email: 'cobrador@popayan23_khpq.com' });
     if (cobrador) {
       const cobradorValid = await bcrypt.compare(cobradorPassword, cobrador.password);
       console.log(`🔐 Verificación Cobrador: ${cobradorValid ? '✅ Funciona' : '❌ No funciona'}`);
+    } else {
+      console.log('❌ Cobrador no encontrado, creándolo...');
+      await db.collection('cobradors').insertOne({
+        nombre: 'Cobrador Principal',
+        email: 'cobrador@popayan23_khpq.com',
+        password: hashedCobrador,
+        cedula: '123456789',
+        telefono: '3001234567',
+        tenantId: 'popayan23_khpq',
+        activo: true
+      });
+      console.log('✅ Cobrador creado');
     }
     
     process.exit(0);

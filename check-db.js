@@ -1,43 +1,34 @@
-const mongoose = require('mongoose');
 require('dotenv').config();
+const mongoose = require('mongoose');
 
-async function debugDatabase() {
+async function check() {
   try {
-    console.log("--- 🔍 INICIANDO DIAGNÓSTICO ---");
     await mongoose.connect(process.env.MONGODB_URI);
-    
-    const db = mongoose.connection;
-    console.log(`✅ Conectado a: ${db.host}`);
-    console.log(`📊 Nombre de la Base de Datos: ${db.name}`);
+    console.log("✅ Conectado a MongoDB");
 
-    // 1. Listar todas las colecciones reales en la DB
-    const collections = await db.db.listCollections().toArray();
-    const names = collections.map(c => c.name);
-    console.log("📂 Colecciones reales encontradas:", names);
+    // Listar colecciones
+    const collections = await mongoose.connection.db.listCollections().toArray();
+    console.log("📂 Colecciones disponibles:", collections.map(c => c.name));
 
-    // 2. Verificar si existe la colección que Mongoose espera
-    if (!names.includes('admins')) {
-      console.log("⚠️ ALERTA: La colección 'admins' NO existe. Mongoose no encontrará los datos.");
-    }
+    // Ver admins
+    const adminCollection = mongoose.connection.db.collection('admins');
+    const admins = await adminCollection.find({}, { projection: { email: 1, tenantId: 1, rol: 1, nombre: 1 } }).toArray();
 
-    // 3. Buscar datos crudos (sin usar el Modelo) para ver qué hay
-    const rawAdmins = await db.db.collection('admins').find({}).toArray();
-    console.log(`👥 Usuarios encontrados en la colección 'admins': ${rawAdmins.length}`);
-    
-    rawAdmins.forEach(u => {
-      console.log(`   - Email: ${u.email} | Rol: ${u.rol} | Tenant: ${u.tenantId}`);
-    });
+    console.log("\n👥 Administradores encontrados:");
+    console.table(admins);
 
-    if (rawAdmins.length === 0) {
-      console.log("💡 Sugerencia: Si Compass te muestra datos, revisa si están en otra colección o en otra base de datos (mira el nombre en el .env)");
-    }
+    // Ver tenants
+    const tenantCollection = mongoose.connection.db.collection('tenants');
+    const tenants = await tenantCollection.find({}, { projection: { nombre: 1, tenantId: 1, codigoEmpresa: 1 } }).toArray();
 
-  } catch (error) {
-    console.error("❌ Error de diagnóstico:", error);
-  } finally {
-    mongoose.disconnect();
-    console.log("--- 🏁 FIN DEL DIAGNÓSTICO ---");
+    console.log("\n🏢 Empresas (Tenants):");
+    console.table(tenants);
+
+    process.exit(0);
+  } catch (err) {
+    console.error("❌ Error:", err);
+    process.exit(1);
   }
 }
 
-debugDatabase();
+check();

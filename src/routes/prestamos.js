@@ -2,254 +2,206 @@ const express = require('express');
 const router = express.Router();
 const Prestamo = require('../models/Prestamo');
 const Cliente = require('../models/Cliente');
-const Pago = require('../models/Pago'); // <--- AGREGADO
-const { authMiddleware, adminOnly } = require('../middleware/auth');
 
-// Middleware para verificar tenantId
-router.use((req, res, next) => {
-  if (!req.tenantId && req.user?.rol !== 'superadmin') {
-    return res.status(400).json({ error: 'Tenant no definido' });
-  }
-  next();
-});
-
-// GET todos los préstamos
-router.get('/', authMiddleware, async (req, res) => {
+// GET - Obtener préstamos (filtra según rol)
+router.get('/', async (req, res) => {
   try {
-    const { search, cobrador: cobradorFilter } = req.query;
-    let query = { tenantId: req.tenantId };
-
-    if (req.user.rol === 'cobrador') {
-      query.cobrador = req.user.id;
-    } else if (cobradorFilter) {
-      query.cobrador = cobradorFilter;
+    const tenantId = req.tenantId;
+    const user = req.user;
+    
+    console.log(`📋 Obteniendo préstamos para tenant: ${tenantId}, usuario: ${user.email} (${user.rol})`);
+    
+    let query = { tenantId };
+    
+    // Si es cobrador, solo ver préstamos de sus clientes
+    if (user.rol === 'cobrador') {
+      const clientes = await Cliente.find({ cobrador: user.id, tenantId });
+      const clientesIds = clientes.map(c => c._id);
+      query.clienteId = { $in: clientesIds };
+      console.log(`🔍 Cobrador ${user.email} filtra préstamos de ${clientesIds.length} clientes`);
     }
-
+    
     const prestamos = await Prestamo.find(query)
-      .populate('cliente', 'nombre cedula')
-      .populate('cobrador', 'nombre cedula')
+      .populate('clienteId', 'nombre cedula telefono')
+      .populate('creadoPor', 'nombre email rol')
       .sort({ createdAt: -1 });
-
-    // Calcular saldo pendiente para cada préstamo
-    const result = prestamos.map(p => ({
-      ...p.toObject(),
-      saldoPendiente: p.totalAPagar - (p.totalPagado || 0),
-      porcentajePagado: ((p.totalPagado || 0) / p.totalAPagar * 100).toFixed(2)
-    }));
-
-    if (search) {
-      return res.json(result.filter(p =>
-        p.cliente?.nombre?.toLowerCase().includes(search.toLowerCase())
-      ));
-    }
-
-    res.json(result);
-  } catch (err) {
-    console.error('❌ Error en GET /prestamos:', err);
-    res.status(500).json({ error: err.message });
+    
+    console.log(`✅ Encontrados ${prestamos.length} préstamos para ${user.email}`);
+    res.json(prestamos);
+  } catch (error) {
+    console.error('❌ Error al obtener préstamos:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 
-// GET préstamos de un cliente específico
-router.get('/cliente/:clienteId', authMiddleware, async (req, res) => {
+// ============================================
+// RUTA FALTANTE - Obtener un préstamo por ID
+// ============================================
+router.get('/:id', async (req, res) => {
   try {
-    const prestamos = await Prestamo.find({ 
-      cliente: req.params.clienteId,
-      tenantId: req.tenantId 
-    })
-    .populate('cliente', 'nombre cedula')
-    .populate('cobrador', 'nombre cedula')
-    .sort({ createdAt: -1 });
+    const tenantId = req.tenantId;
+    const user = req.user;
+    const { id } = req.params;
     
-    // Calcular saldo pendiente
-    const result = prestamos.map(p => ({
-      ...p.toObject(),
-      saldoPendiente: p.totalAPagar - (p.totalPagado || 0),
-      porcentajePagado: ((p.totalPagado || 0) / p.totalAPagar * 100).toFixed(2)
-    }));
+    console.log(`🔍 Obteniendo préstamo ID: ${id} para usuario: ${user.email} (${user.rol})`);
     
-    res.json(result);
-  } catch (err) {
-    console.error('❌ Error en GET /cliente/:clienteId:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// GET préstamo por ID
-router.get('/:id', authMiddleware, async (req, res) => {
-  try {
-    const prestamo = await Prestamo.findOne({ 
-      _id: req.params.id,
-      tenantId: req.tenantId 
-    })
-    .populate('cliente', 'nombre cedula celular direccion')
-    .populate('cobrador', 'nombre cedula');
-    
-    if (!prestamo) return res.status(404).json({ error: 'Préstamo no encontrado' });
-    
-    // Obtener pagos del préstamo
-    const pagos = await Pago.find({ 
-      prestamoId: req.params.id,
-      tenantId: req.tenantId 
-    }).sort({ fecha: -1 });
-    
-    res.json({
-      ...prestamo.toObject(),
-      saldoPendiente: prestamo.totalAPagar - (prestamo.totalPagado || 0),
-      porcentajePagado: ((prestamo.totalPagado || 0) / prestamo.totalAPagar * 100).toFixed(2),
-      pagos
-    });
-  } catch (err) {
-    console.error('❌ Error en GET /prestamos/:id:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ===== NUEVA RUTA: GET pagos de un préstamo específico =====
-router.get('/:id/pagos', authMiddleware, async (req, res) => {
-  try {
-    const pagos = await Pago.find({ 
-      prestamoId: req.params.id,
-      tenantId: req.tenantId 
-    })
-    .populate('cobradorId', 'nombre')
-    .sort({ fecha: -1 });
-    
-    res.json(pagos);
-  } catch (err) {
-    console.error('❌ Error en GET /prestamos/:id/pagos:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ===== NUEVA RUTA: GET resumen de pagos para dashboard =====
-router.get('/pagos/resumen', authMiddleware, async (req, res) => {
-  try {
-    const hoy = new Date();
-    hoy.setHours(0, 0, 0, 0);
-    const manana = new Date(hoy);
-    manana.setDate(manana.getDate() + 1);
-    
-    // Pagos de hoy
-    const pagosHoy = await Pago.find({
-      tenantId: req.tenantId,
-      fecha: { $gte: hoy, $lt: manana }
-    });
-    
-    const totalHoy = pagosHoy.reduce((sum, p) => sum + p.monto, 0);
-    
-    // Pagos del mes
-    const inicioMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
-    const finMes = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0);
-    finMes.setHours(23, 59, 59, 999);
-    
-    const pagosMes = await Pago.find({
-      tenantId: req.tenantId,
-      fecha: { $gte: inicioMes, $lt: finMes }
-    });
-    
-    const totalMes = pagosMes.reduce((sum, p) => sum + p.monto, 0);
-    
-    res.json({
-      pagosHoy: pagosHoy.length,
-      totalHoy,
-      pagosMes: pagosMes.length,
-      totalMes,
-      ultimosPagos: await Pago.find({ tenantId: req.tenantId })
-        .populate({
-          path: 'prestamoId',
-          populate: { path: 'cliente', select: 'nombre' }
-        })
-        .populate('cobradorId', 'nombre')
-        .sort({ fecha: -1 })
-        .limit(10)
-    });
-    
-  } catch (err) {
-    console.error('❌ Error en GET /pagos/resumen:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// POST crear préstamo
-router.post('/', authMiddleware, async (req, res) => {
-  try {
-    const { clienteId, capital, interes, numeroCuotas, frecuencia, notas } = req.body;
-    
-    const totalAPagar = Math.round(capital * (1 + interes / 100));
-    
-    // Calcular fecha vencimiento
-    const fechaInicio = new Date();
-    let fechaVencimiento = new Date(fechaInicio);
-    if (frecuencia === 'diario') fechaVencimiento.setDate(fechaVencimiento.getDate() + numeroCuotas);
-    else if (frecuencia === 'semanal') fechaVencimiento.setDate(fechaVencimiento.getDate() + numeroCuotas * 7);
-    else if (frecuencia === 'quincenal') fechaVencimiento.setDate(fechaVencimiento.getDate() + numeroCuotas * 15);
-    else fechaVencimiento.setMonth(fechaVencimiento.getMonth() + numeroCuotas);
-
-    // Determinar cobrador
-    let cobradorId = req.user.id;
-    if (req.user.rol === 'admin' && req.body.cobradorId) {
-      cobradorId = req.body.cobradorId;
-    }
-    
-    if (req.user.rol === 'cobrador') {
-      // Verificar que el cliente pertenece a este cobrador
-      const cliente = await Cliente.findOne({ 
-        _id: clienteId, 
-        tenantId: req.tenantId 
-      });
-      
-      if (!cliente || cliente.cobrador?.toString() !== req.user.id) {
-        return res.status(403).json({ error: 'No autorizado' });
-      }
-    }
-
-    const prestamo = new Prestamo({
-      cliente: clienteId,
-      cobrador: cobradorId,
-      capital,
-      interes,
-      totalAPagar,
-      numeroCuotas,
-      frecuencia: frecuencia || 'diario',
-      fechaInicio,
-      fechaVencimiento,
-      notas,
-      tenantId: req.tenantId,
-      totalPagado: 0,
-      estado: 'activo'
-    });
-
-    await prestamo.save();
-    const populated = await prestamo.populate([
-      { path: 'cliente', select: 'nombre cedula' },
-      { path: 'cobrador', select: 'nombre cedula' }
-    ]);
-    
-    res.status(201).json(populated);
-  } catch (err) {
-    console.error('❌ Error en POST /prestamos:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// PUT actualizar préstamo (solo admin)
-router.put('/:id', authMiddleware, adminOnly, async (req, res) => {
-  try {
-    const prestamo = await Prestamo.findOneAndUpdate(
-      { _id: req.params.id, tenantId: req.tenantId },
-      req.body, 
-      { new: true }
-    );
+    // Buscar el préstamo
+    const prestamo = await Prestamo.findOne({ _id: id, tenantId })
+      .populate('clienteId', 'nombre cedula telefono direccion')
+      .populate('creadoPor', 'nombre email rol');
     
     if (!prestamo) {
       return res.status(404).json({ error: 'Préstamo no encontrado' });
     }
     
+    // Si es cobrador, verificar que el préstamo pertenece a un cliente suyo
+    if (user.rol === 'cobrador') {
+      const cliente = await Cliente.findOne({ _id: prestamo.clienteId._id, cobrador: user.id, tenantId });
+      if (!cliente) {
+        return res.status(403).json({ error: 'No autorizado para ver este préstamo' });
+      }
+    }
+    
+    console.log(`✅ Préstamo encontrado para ${user.email}`);
     res.json(prestamo);
-  } catch (err) {
-    console.error('❌ Error en PUT /prestamos/:id:', err);
-    res.status(500).json({ error: err.message });
+  } catch (error) {
+    console.error('❌ Error al obtener préstamo por ID:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET - Préstamos de un cliente específico
+router.get('/cliente/:clienteId', async (req, res) => {
+  try {
+    const tenantId = req.tenantId;
+    const user = req.user;
+    const { clienteId } = req.params;
+    
+    // Verificar que el cliente existe y pertenece al tenant
+    const cliente = await Cliente.findOne({ _id: clienteId, tenantId });
+    if (!cliente) {
+      return res.status(404).json({ error: 'Cliente no encontrado' });
+    }
+    
+    // Si es cobrador, verificar que el cliente le pertenece
+    if (user.rol === 'cobrador' && cliente.cobrador?.toString() !== user.id) {
+      return res.status(403).json({ error: 'No autorizado para ver los préstamos de este cliente' });
+    }
+    
+    const prestamos = await Prestamo.find({ clienteId, tenantId })
+      .populate('creadoPor', 'nombre email rol')
+      .sort({ createdAt: -1 });
+    
+    res.json(prestamos);
+  } catch (error) {
+    console.error('❌ Error al obtener préstamos del cliente:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST - Crear préstamo (admin y cobrador pueden, pero cobrador solo para sus clientes)
+router.post('/', async (req, res) => {
+  try {
+    const tenantId = req.tenantId;
+    const user = req.user;
+    const { clienteId, capital, interes, plazo, fechaInicio, fechaVencimiento } = req.body;
+    
+    console.log(`📝 Creando préstamo por ${user.email} (${user.rol}) para cliente: ${clienteId}`);
+    
+    if (!clienteId || !capital || !plazo || !fechaInicio || !fechaVencimiento) {
+      return res.status(400).json({ error: 'Faltan datos requeridos' });
+    }
+    
+    // Verificar que el cliente existe
+    const cliente = await Cliente.findOne({ _id: clienteId, tenantId });
+    if (!cliente) {
+      return res.status(404).json({ error: 'Cliente no encontrado' });
+    }
+    
+    // Si es cobrador, verificar que el cliente le pertenece
+    if (user.rol === 'cobrador' && cliente.cobrador?.toString() !== user.id) {
+      return res.status(403).json({ error: 'No puede crear préstamo para este cliente' });
+    }
+    
+    const total = capital + (interes || 0);
+    
+    const prestamo = new Prestamo({
+      clienteId,
+      capital,
+      interes: interes || 0,
+      total,
+      totalAPagar: total,
+      totalPagado: 0,
+      plazo,
+      fechaInicio: new Date(fechaInicio),
+      fechaVencimiento: new Date(fechaVencimiento),
+      estado: 'activo',
+      tenantId,
+      creadoPor: user.id,
+      creadoPorRol: user.rol
+    });
+    
+    await prestamo.save();
+    
+    const prestamoPopulado = await prestamo.populate('clienteId', 'nombre cedula');
+    console.log(`✅ Préstamo creado por ${user.email} (${user.rol})`);
+    res.status(201).json(prestamoPopulado);
+  } catch (error) {
+    console.error('❌ Error al crear préstamo:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PUT - Actualizar préstamo (solo admin)
+router.put('/:id', async (req, res) => {
+  try {
+    const tenantId = req.tenantId;
+    const user = req.user;
+    
+    // Solo admin puede editar préstamos
+    if (user.rol !== 'admin') {
+      return res.status(403).json({ error: 'No autorizado, solo administradores' });
+    }
+    
+    const prestamo = await Prestamo.findOneAndUpdate(
+      { _id: req.params.id, tenantId },
+      req.body,
+      { new: true }
+    ).populate('clienteId', 'nombre cedula');
+    
+    if (!prestamo) {
+      return res.status(404).json({ error: 'Préstamo no encontrado' });
+    }
+    
+    console.log(`✅ Préstamo actualizado por ${user.email}`);
+    res.json(prestamo);
+  } catch (error) {
+    console.error('❌ Error al actualizar préstamo:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE - Eliminar préstamo (solo admin)
+router.delete('/:id', async (req, res) => {
+  try {
+    const tenantId = req.tenantId;
+    const user = req.user;
+    
+    if (user.rol !== 'admin') {
+      return res.status(403).json({ error: 'No autorizado, solo administradores' });
+    }
+    
+    const prestamo = await Prestamo.findOneAndDelete({ _id: req.params.id, tenantId });
+    
+    if (!prestamo) {
+      return res.status(404).json({ error: 'Préstamo no encontrado' });
+    }
+    
+    console.log(`✅ Préstamo eliminado por ${user.email}`);
+    res.json({ message: 'Préstamo eliminado correctamente' });
+  } catch (error) {
+    console.error('❌ Error al eliminar préstamo:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 
