@@ -87,7 +87,7 @@ prestamoSchema.index({ creadoPor: 1 });
 // Middleware para calcular total antes de guardar
 prestamoSchema.pre('save', function(next) {
   if (this.isModified('capital') || this.isModified('interes')) {
-    this.total = this.capital + this.interes;
+    this.total = Math.round(this.capital * (1 + (this.interes || 0) / 100));
     this.totalAPagar = this.total;
   }
   next();

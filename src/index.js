@@ -2,9 +2,10 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
-const jwt = require('jsonwebtoken');
 const http = require('http');
+const dns = require('dns');
 const socketIo = require('socket.io');
+const { verifyToken } = require('./utils/jwt');
 
 const app = express();
 const server = http.createServer(app);
@@ -77,7 +78,7 @@ app.use((req,res,next)=>{
   const token = req.headers.authorization?.split(' ')[1];
   if(token){
     try{
-      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'tu_secreto_temporal');
+      const decoded = verifyToken(token);
       req.user = decoded;
     }catch(err){
       console.log('⚠️ Token inválido:', err.message);
@@ -88,6 +89,7 @@ app.use((req,res,next)=>{
 
 /* RUTAS DE SUPERADMIN */
 app.use('/api/superadmin', require('./routes/superadmin'));
+app.use('/api/superadmin/mensualidades', require('./routes/mensualidades'));
 app.use('/api/pagos', require('./routes/pagos'));
 
 /* TENANT MIDDLEWARE */
@@ -104,6 +106,8 @@ app.use('/api/dashboard-charts', tenantMiddleware);
 app.use('/api/cobrador', tenantMiddleware);
 app.use('/api/calendario', tenantMiddleware);
 app.use('/api/cartera', tenantMiddleware);
+app.use('/api/oficina/mensualidad', tenantMiddleware);
+app.use('/api/oficina/notificaciones', tenantMiddleware);
 
 /* RUTAS DE OFICINA */
 app.use('/api/dashboard', require('./routes/dashboard'));
@@ -116,18 +120,47 @@ app.use('/api/dashboard-charts', require('./routes/dashboardCharts'));
 app.use('/api/cobrador', require('./routes/cobrador.routes'));
 app.use('/api/calendario', require('./routes/calendario'));
 app.use('/api/cartera', require('./routes/cartera'));
+app.use('/api/oficina/mensualidad', require('./routes/oficinaMensualidad'));
+app.use('/api/oficina/notificaciones', require('./routes/oficinaNotificaciones'));
 
 /* SOCKET.IO - COMUNICACIÓN EN TIEMPO REAL */
+io.use((socket, next) => {
+  const token = socket.handshake.auth?.token || socket.handshake.headers?.authorization?.split(' ')[1];
+
+  if (!token) {
+    return next(new Error('Token requerido'));
+  }
+
+  try {
+    socket.user = verifyToken(token);
+    return next();
+  } catch (err) {
+    return next(new Error('Token invalido'));
+  }
+});
+
 io.on('connection', (socket) => {
   console.log('🔌 Nuevo cliente conectado:', socket.id);
   
-  socket.on('join-tenant', (tenantId) => {
+  socket.on('join-tenant', () => {
+    const tenantId = socket.user?.tenantId;
+
+    if (!tenantId || socket.user?.rol === 'superadmin' || socket.user?.rol === 'superadministrador') {
+      socket.emit('join-error', { error: 'Tenant no autorizado para este usuario' });
+      return;
+    }
+
     socket.join(`tenant-${tenantId}`);
     console.log(`📡 Cliente ${socket.id} unido a sala tenant-${tenantId}`);
     socket.emit('joined', { tenantId, message: 'Conectado al canal de notificaciones' });
   });
   
   socket.on('join-superadmin', () => {
+    if (socket.user?.rol !== 'superadmin' && socket.user?.rol !== 'superadministrador') {
+      socket.emit('join-error', { error: 'Solo superadmin puede unirse a esta sala' });
+      return;
+    }
+
     socket.join('superadmin-room');
     console.log(`👑 Cliente ${socket.id} unido a sala superadmin`);
     socket.emit('joined', { message: 'Conectado como Super Admin' });
@@ -147,6 +180,11 @@ io.on('connection', (socket) => {
   // RECORDATORIO NORMAL CON MENSAJE PERSONALIZADO
   // ============================================
   socket.on('enviar-recordatorio', (data) => {
+    if (socket.user?.rol !== 'superadmin' && socket.user?.rol !== 'superadministrador') {
+      socket.emit('recordatorio-enviado', { success: false, mensaje: 'No autorizado' });
+      return;
+    }
+
     console.log('🔔 Recordatorio enviado a:', data.empresa);
     const mensaje = data.mensajePersonalizado || `⚠️ RECORDATORIO: Tienes un pago pendiente de $${data.monto.toLocaleString()} con ${data.diasAtraso} días de atraso.`;
     
@@ -170,6 +208,11 @@ io.on('connection', (socket) => {
   // RECORDATORIO MENSUAL CON MENSAJE PERSONALIZADO
   // ============================================
   socket.on('enviar-recordatorio-mensual', (data) => {
+    if (socket.user?.rol !== 'superadmin' && socket.user?.rol !== 'superadministrador') {
+      socket.emit('recordatorio-enviado', { success: false, mensaje: 'No autorizado' });
+      return;
+    }
+
     console.log('📅 Recordatorio mensual enviado a:', data.empresa);
     const mensaje = data.mensajePersonalizado || `⚠️ RECORDATORIO MENSUAL: Tienes un pago pendiente de $${data.monto.toLocaleString()} con ${data.diasAtraso} días de atraso. Fecha vencimiento: ${data.fechaVencimiento}`;
     
@@ -204,14 +247,23 @@ app.use('*',(req,res)=>{
 });
 
 /* MONGO CONECT */
-mongoose.connect(process.env.MONGODB_URI)
-.then(()=>{
-  console.log("✅ MongoDB conectado");
+dns.setServers(['8.8.8.8', '1.1.1.1']);
+console.log('DNS configurado para MongoDB Atlas:', dns.getServers());
+
+mongoose.connect(process.env.MONGODB_URI, {
+  serverSelectionTimeoutMS: 10000
 })
-.catch(err=>{
-  console.log("❌ Error MongoDB:", err.message);
-  process.exit(1);
-});
+  .then(() => {
+    console.log("✅ MongoDB conectado");
+  })
+  .catch(err => {
+    console.error("❌ Error MongoDB:", {
+      name: err.name,
+      code: err.code,
+      message: err.message
+    });
+    process.exit(1);
+  });
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT,()=> console.log(`🚀 Servidor corriendo en puerto ${PORT}`));

@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
 const Admin = require('../models/Admin');
 const Cobrador = require('../models/Cobrador');
+const { signToken } = require('../utils/jwt');
 
 // Ruta de login para todos los usuarios (superadmin, admin, cobrador)
 router.post('/login', async (req, res) => {
@@ -40,13 +40,13 @@ router.post('/login', async (req, res) => {
     }
     
     // Generar token JWT
-    const token = jwt.sign(
+    const token = signToken(
       { 
         id: user._id, 
         email: user.email, 
-        rol: user.rol || role 
+        rol: user.rol || role,
+        tenantId: user.tenantId
       },
-      process.env.JWT_SECRET || 'tu_secreto_temporal',
       { expiresIn: '7d' }
     );
     

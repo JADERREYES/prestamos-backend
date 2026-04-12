@@ -1,4 +1,4 @@
-const jwt = require('jsonwebtoken');
+const { verifyToken } = require('../utils/jwt');
 
 const tenantMiddleware = async (req, res, next) => {
   try {
@@ -24,7 +24,7 @@ const tenantMiddleware = async (req, res, next) => {
       console.log(`🔓 Ruta pública: ${req.path}`);
       if (token) {
         try {
-          const decoded = jwt.verify(token, process.env.JWT_SECRET || 'tu_secreto_temporal');
+          const decoded = verifyToken(token);
           req.user = decoded;
           if (decoded.tenantId) {
             req.tenantId = decoded.tenantId.toLowerCase().trim();
@@ -45,7 +45,7 @@ const tenantMiddleware = async (req, res, next) => {
     // Decodificar token con manejo de errores
     let decoded;
     try {
-      decoded = jwt.verify(token, process.env.JWT_SECRET || 'tu_secreto_temporal');
+      decoded = verifyToken(token);
     } catch (err) {
       console.log("❌ Token inválido:", err.message);
       return res.status(401).json({ error: "Token inválido" });

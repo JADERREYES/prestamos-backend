@@ -27,6 +27,22 @@ const tenantSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  montoMensualidad: {
+    type: Number,
+    default: 350000,
+    min: 0
+  },
+  diaVencimientoMensualidad: {
+    type: Number,
+    default: null,
+    min: 1,
+    max: 31
+  },
+  diasGraciaMensualidad: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
   fechaCreacion: {
     type: Date,
     default: Date.now

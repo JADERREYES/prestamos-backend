@@ -9,9 +9,7 @@ const cobradorSchema = new mongoose.Schema({
   email: {
     type: String,
     required: true,
-    unique: true,
-    lowercase: true,
-    index: true
+    lowercase: true
   },
   password: {
     type: String,
@@ -19,9 +17,7 @@ const cobradorSchema = new mongoose.Schema({
   },
   cedula: {
     type: String,
-    required: true,
-    unique: true,
-    index: true
+    required: true
   },
   telefono: {
     type: String,
@@ -47,6 +43,9 @@ const cobradorSchema = new mongoose.Schema({
 }, {
   timestamps: true
 });
+
+cobradorSchema.index({ tenantId: 1, email: 1 }, { unique: true });
+cobradorSchema.index({ tenantId: 1, cedula: 1 }, { unique: true });
 
 // Hashear password antes de guardar
 cobradorSchema.pre('save', async function(next) {

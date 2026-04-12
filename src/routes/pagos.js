@@ -1,11 +1,13 @@
 const express = require('express');
 const router = express.Router();
-const jwt = require('jsonwebtoken');
 const Pago = require('../models/Pago');
 const Prestamo = require('../models/Prestamo');
 const Tenant = require('../models/Tenant');
 const Admin = require('../models/Admin');
 const NotificacionPago = require('../models/NotificacionPago');
+const { verifyToken } = require('../utils/jwt');
+
+const isSuperadminRole = (rol) => rol === 'superadmin' || rol === 'superadministrador';
 
 // Middleware para verificar token
 const verificarToken = async (req, res, next) => {
@@ -16,10 +18,7 @@ const verificarToken = async (req, res, next) => {
       return res.status(401).json({ error: 'Token no proporcionado' });
     }
 
-    const decoded = jwt.verify(
-      token,
-      process.env.JWT_SECRET || 'tu_secreto_temporal'
-    );
+    const decoded = verifyToken(token);
 
     req.usuario = decoded;
     next();
@@ -27,6 +26,30 @@ const verificarToken = async (req, res, next) => {
     return res.status(401).json({ error: 'Token inválido' });
   }
 };
+
+const requireSuperadmin = async (req, res, next) => {
+  try {
+    const admin = await Admin.findById(req.usuario.id);
+    if (!admin || !isSuperadminRole(admin.rol)) {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
+    req.superadmin = admin;
+    next();
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+};
+
+const resolveTenantForOfficePayment = (req) => {
+  if (isSuperadminRole(req.usuario.rol)) {
+    return req.body.tenantId;
+  }
+  return req.usuario.tenantId;
+};
+
+const canAccessTenant = (req, tenantId) => (
+  isSuperadminRole(req.usuario.rol) || req.usuario.tenantId === tenantId
+);
 
 // ============================================
 // RUTAS PARA COBRADORES (PAGOS DE PRÉSTAMOS)
@@ -48,13 +71,9 @@ router.post('/', verificarToken, async (req, res) => {
       return res.status(400).json({ error: 'Faltan datos requeridos' });
     }
 
-    const prestamo = await Prestamo.findById(prestamoId);
+    const prestamo = await Prestamo.findOne({ _id: prestamoId, tenantId });
     if (!prestamo) {
       return res.status(404).json({ error: 'Préstamo no encontrado' });
-    }
-
-    if (prestamo.tenantId !== tenantId) {
-      return res.status(403).json({ error: 'No autorizado' });
     }
 
     if (prestamo.estado === 'pagado') {
@@ -68,7 +87,7 @@ router.post('/', verificarToken, async (req, res) => {
       nuevoEstado = 'pagado';
     }
 
-    await Prestamo.findByIdAndUpdate(prestamoId, {
+    await Prestamo.findOneAndUpdate({ _id: prestamoId, tenantId }, {
       totalPagado: nuevoTotalPagado,
       estado: nuevoEstado,
       ultimoPago: new Date()
@@ -152,54 +171,20 @@ router.get('/hoy', verificarToken, async (req, res) => {
 // Registrar un pago de empresa (desde el admin de oficina)
 router.post('/registrar', verificarToken, async (req, res) => {
   try {
-    const { tenantId, monto, mes, año, fechaVencimiento } = req.body;
+    const { mes, año } = req.body;
+    const tenantId = resolveTenantForOfficePayment(req);
 
     if (!tenantId || !mes || !año) {
       return res.status(400).json({ error: 'Faltan datos requeridos' });
     }
 
-    const tenant = await Tenant.findOne({ tenantId });
-    if (!tenant) {
-      return res.status(404).json({ error: 'Empresa no encontrada' });
+    if (!canAccessTenant(req, tenantId)) {
+      return res.status(403).json({ error: 'No autorizado para operar sobre este tenant' });
     }
 
-    const pagoExistente = await Pago.findOne({ tenantId, año, mes });
-    if (pagoExistente) {
-      return res.status(400).json({
-        error: 'Ya hay un pago registrado para este mes'
-      });
-    }
-
-    const nuevoPago = new Pago({
-      tenantId,
-      tenantNombre: tenant.nombre,
-      monto: monto || 350000,
-      mes,
-      año,
-      fechaVencimiento: fechaVencimiento || new Date(),
-      fechaPago: new Date(),
-      estado: 'pagado',
-      registradoPor: req.usuario.id,
-      registradoPorTipo: 'admin'
-    });
-
-    await nuevoPago.save();
-
-    const io = req.app.get('io');
-    if (io) {
-      io.to('superadmin-room').emit('nueva-notificacion', {
-        type: 'pago',
-        empresa: tenant.nombre,
-        mensaje: `${tenant.nombre} ha realizado un pago de $${(
-          monto || 350000
-        ).toLocaleString()}`,
-        fecha: new Date()
-      });
-    }
-
-    res.json({
-      mensaje: 'Pago registrado exitosamente',
-      pago: nuevoPago
+    return res.status(501).json({
+      error: 'Los pagos de mensualidad de oficina deben usar el modulo de mensualidades',
+      detalle: 'El modelo Pago queda reservado para pagos de prestamos'
     });
   } catch (error) {
     console.error('Error registrando pago:', error);
@@ -211,21 +196,23 @@ router.post('/registrar', verificarToken, async (req, res) => {
 router.get('/historial/:tenantId', verificarToken, async (req, res) => {
   try {
     const { tenantId } = req.params;
-    const pagos = await Pago.find({ tenantId }).sort({ fechaPago: -1 });
-    res.json(pagos);
+
+    if (!canAccessTenant(req, tenantId)) {
+      return res.status(403).json({ error: 'No autorizado para consultar este tenant' });
+    }
+
+    return res.status(501).json({
+      error: 'El historial de mensualidades de oficina debe usar el modulo de mensualidades',
+      detalle: 'El modelo Pago queda reservado para pagos de prestamos'
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
 // Obtener empresas con pagos pendientes (para super admin)
-router.get('/pendientes', verificarToken, async (req, res) => {
+router.get('/pendientes', verificarToken, requireSuperadmin, async (req, res) => {
   try {
-    const admin = await Admin.findById(req.usuario.id);
-    if (!admin || admin.rol !== 'superadmin') {
-      return res.status(403).json({ error: 'No autorizado' });
-    }
-
     const hoy = new Date();
     const empresas = await Tenant.find({ estado: true });
     const pendientes = [];
@@ -328,14 +315,9 @@ router.patch('/mis-notificaciones/:id/leida', verificarToken, async (req, res) =
 });
 
 // Enviar recordatorio normal (super admin -> admin de oficina)
-router.post('/recordatorio', verificarToken, async (req, res) => {
+router.post('/recordatorio', verificarToken, requireSuperadmin, async (req, res) => {
   try {
     const { tenantId, empresa, monto, diasAtraso, fechaVencimiento, mensajePersonalizado } = req.body;
-
-    const admin = await Admin.findById(req.usuario.id);
-    if (!admin || admin.rol !== 'superadmin') {
-      return res.status(403).json({ error: 'No autorizado' });
-    }
 
     const tenant = await Tenant.findOne({ tenantId });
     if (!tenant) {
@@ -358,6 +340,7 @@ router.post('/recordatorio', verificarToken, async (req, res) => {
       monto: monto || 0,
       enviada: true,
       leida: false,
+      enviadaPor: req.superadmin._id,
       fechaEnvio: new Date()
     });
 
@@ -388,14 +371,9 @@ router.post('/recordatorio', verificarToken, async (req, res) => {
 });
 
 // Enviar recordatorio mensual (super admin -> admin de oficina)
-router.post('/recordatorio-mensual', verificarToken, async (req, res) => {
+router.post('/recordatorio-mensual', verificarToken, requireSuperadmin, async (req, res) => {
   try {
     const { tenantId, empresa, monto, diasAtraso, fechaVencimiento, mensajePersonalizado } = req.body;
-
-    const admin = await Admin.findById(req.usuario.id);
-    if (!admin || admin.rol !== 'superadmin') {
-      return res.status(403).json({ error: 'No autorizado' });
-    }
 
     const tenant = await Tenant.findOne({ tenantId });
     if (!tenant) {
@@ -418,6 +396,7 @@ router.post('/recordatorio-mensual', verificarToken, async (req, res) => {
       monto: monto || 0,
       enviada: true,
       leida: false,
+      enviadaPor: req.superadmin._id,
       fechaEnvio: new Date()
     });
 

@@ -1,5 +1,5 @@
-const jwt = require('jsonwebtoken');
 const Admin = require('../models/Admin'); // O tu modelo de usuario
+const { signToken } = require('../utils/jwt');
 
 exports.adminLogin = async (req, res) => {
   try {
@@ -11,13 +11,12 @@ exports.adminLogin = async (req, res) => {
     }
 
     // EL SECRETO: Meter el tenantId en el PAYLOAD del JWT
-    const token = jwt.sign(
+    const token = signToken(
       { 
         id: admin._id, 
         rol: admin.rol, 
         tenantId: admin.tenantId // <--- CRUCIAL
       },
-      process.env.JWT_SECRET || 'tu_secreto_temporal',
       { expiresIn: '24h' }
     );
 

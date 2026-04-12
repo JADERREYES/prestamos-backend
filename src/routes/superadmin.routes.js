@@ -1,13 +1,14 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
 
 const Tenant = require('../models/Tenant');
 const Admin = require('../models/Admin');
 const Cobrador = require('../models/Cobrador');
 const Cliente = require('../models/Cliente');
 const Prestamo = require('../models/Prestamo');
+const MensualidadOficina = require('../models/MensualidadOficina');
+const NotificacionOficina = require('../models/NotificacionOficina');
 
 const { 
   generarPassword, 
@@ -16,6 +17,7 @@ const {
   generarEmailCobrador,
   generarCodigoEmpresa
 } = require('../utils/generarCredenciales');
+const { verifyToken } = require('../utils/jwt');
 
 // Normalizador de tenantId
 const normalizarTenantId = (valor) => {
@@ -35,7 +37,7 @@ const isSuperAdmin = async (req, res, next) => {
       return res.status(401).json({ error: "Token no proporcionado" });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'tu_secreto_temporal');
+    const decoded = verifyToken(token);
     const user = await Admin.findById(decoded.id);
     
     if (!user) {
@@ -217,6 +219,8 @@ router.delete("/oficinas/:id", isSuperAdmin, async (req, res) => {
     await Cobrador.deleteMany({ tenantId: tenantIdNormalizado });
     await Cliente.deleteMany({ tenantId: tenantIdNormalizado });
     await Prestamo.deleteMany({ tenantId: tenantIdNormalizado });
+    await MensualidadOficina.deleteMany({ tenantId: tenantIdNormalizado });
+    await NotificacionOficina.deleteMany({ tenantId: tenantIdNormalizado });
     await Tenant.findByIdAndDelete(req.params.id);
 
     res.json({ 

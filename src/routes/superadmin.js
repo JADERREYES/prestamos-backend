@@ -1,13 +1,15 @@
 const express = require("express");
 const router = express.Router();
 const bcrypt = require("bcryptjs");
-const jwt = require('jsonwebtoken');
+const { verifyToken } = require('../utils/jwt');
 
 const Tenant = require("../models/Tenant");
 const Admin = require("../models/Admin");
 const Cobrador = require("../models/Cobrador");
 const Cliente = require("../models/Cliente");
 const Prestamo = require("../models/Prestamo");
+const MensualidadOficina = require("../models/MensualidadOficina");
+const NotificacionOficina = require("../models/NotificacionOficina");
 const superadminController = require('../controllers/superadmin.controller');
 
 const { 
@@ -41,7 +43,7 @@ const isSuperAdmin = async (req, res, next) => {
     }
 
     // Verificar token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'tu_secreto_temporal');
+    const decoded = verifyToken(token);
     console.log("✅ Token verificado:", decoded.email);
     
     // Buscar usuario en la base de datos
@@ -78,13 +80,13 @@ const isSuperAdmin = async (req, res, next) => {
 // ============ RUTAS DEL CONTROLADOR (sin middleware) ============
 
 // Ruta para obtener todas las empresas (oficinas)
-router.get('/tenants', superadminController.listarTenants);
+router.get('/tenants', isSuperAdmin, superadminController.listarTenants);
 
 // Ruta para crear una nueva empresa (oficina)
-router.post('/tenants', superadminController.crearTenant);
+router.post('/tenants', isSuperAdmin, superadminController.crearTenant);
 
 // Ruta para el dashboard inicial del superadmin
-router.get('/dashboard-stats', superadminController.obtenerEstadisticas);
+router.get('/dashboard-stats', isSuperAdmin, superadminController.obtenerEstadisticas);
 
 // ============ RUTAS PROTEGIDAS CON MIDDLEWARE ============
 
@@ -286,6 +288,8 @@ router.delete("/oficinas/:id", isSuperAdmin, async (req, res) => {
     const cobradoresDeleted = await Cobrador.deleteMany({ tenantId: tenantIdNormalizado });
     const clientesDeleted = await Cliente.deleteMany({ tenantId: tenantIdNormalizado });
     const prestamosDeleted = await Prestamo.deleteMany({ tenantId: tenantIdNormalizado });
+    const mensualidadesDeleted = await MensualidadOficina.deleteMany({ tenantId: tenantIdNormalizado });
+    const notificacionesDeleted = await NotificacionOficina.deleteMany({ tenantId: tenantIdNormalizado });
     await Tenant.findByIdAndDelete(req.params.id);
 
     console.log(`✅ Eliminados: ${adminsDeleted.deletedCount} admins, ${cobradoresDeleted.deletedCount} cobradores, ${clientesDeleted.deletedCount} clientes, ${prestamosDeleted.deletedCount} préstamos`);
@@ -296,7 +300,9 @@ router.delete("/oficinas/:id", isSuperAdmin, async (req, res) => {
         admins: adminsDeleted.deletedCount,
         cobradores: cobradoresDeleted.deletedCount,
         clientes: clientesDeleted.deletedCount,
-        prestamos: prestamosDeleted.deletedCount
+        prestamos: prestamosDeleted.deletedCount,
+        mensualidades: mensualidadesDeleted.deletedCount,
+        notificaciones: notificacionesDeleted.deletedCount
       }
     });
   } catch (err) {
@@ -348,11 +354,10 @@ router.get("/oficinas/:id/detalle", isSuperAdmin, async (req, res) => {
   }
 });
 
-// Ruta de prueba (SIN middleware)
-router.get("/test", (req, res) => {
+// Ruta de prueba protegida para diagnosticos de superadmin
+router.get("/test", isSuperAdmin, (req, res) => {
   res.json({ 
     mensaje: "Ruta de superadmin funcionando",
-    headers: req.headers,
     user: req.user || null
   });
 });

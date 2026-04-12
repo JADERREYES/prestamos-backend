@@ -1,7 +1,7 @@
 const Admin = require('../models/Admin');
 const Cobrador = require('../models/Cobrador');
 const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
+const { signToken, verifyToken: verifyJwtToken } = require('../utils/jwt');
 
 // =========================
 // LOGIN ADMIN
@@ -52,14 +52,13 @@ exports.adminLogin = async (req, res) => {
     console.log('✅ Contraseña válida');
     console.log('🪙 Generando token...');
 
-    const token = jwt.sign(
+    const token = signToken(
       {
         id: admin._id,
         email: admin.email,
         rol: admin.rol,
         tenantId: admin.tenantId
       },
-      process.env.JWT_SECRET || 'tu_secreto_temporal',
       { expiresIn: '24h' }
     );
 
@@ -156,7 +155,7 @@ exports.cobradorLogin = async (req, res) => {
 
     console.log('🪙 Generando token...');
 
-    const token = jwt.sign(
+    const token = signToken(
       {
         id: cobrador._id,
         email: cobrador.email,
@@ -164,7 +163,6 @@ exports.cobradorLogin = async (req, res) => {
         tenantId: cobrador.tenantId,
         nombre: cobrador.nombre
       },
-      process.env.JWT_SECRET || 'tu_secreto_temporal',
       { expiresIn: '24h' }
     );
 
@@ -285,10 +283,7 @@ exports.verifyToken = async (req, res) => {
       });
     }
 
-    const decoded = jwt.verify(
-      token,
-      process.env.JWT_SECRET || 'tu_secreto_temporal'
-    );
+    const decoded = verifyJwtToken(token);
 
     let user = null;
 

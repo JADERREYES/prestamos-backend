@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
 const Admin = require('../models/Admin');
 const Cobrador = require('../models/Cobrador');
+const { signToken } = require('../utils/jwt');
 
 // Ruta de login para admin de oficina
 router.post('/admin/login', async (req, res) => {
@@ -43,14 +43,13 @@ router.post('/admin/login', async (req, res) => {
     }
     
     // Generar token JWT
-    const token = jwt.sign(
+    const token = signToken(
       { 
         id: user._id, 
         email: user.email, 
         rol: user.rol,
         tenantId: user.tenantId
       },
-      process.env.JWT_SECRET || 'tu_secreto_temporal',
       { expiresIn: '7d' }
     );
     
@@ -98,14 +97,13 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ error: 'Credenciales inválidas' });
     }
     
-    const token = jwt.sign(
+    const token = signToken(
       { 
         id: user._id, 
         email: user.email, 
         rol: user.rol,
         tenantId: user.tenantId || 'system'
       },
-      process.env.JWT_SECRET || 'tu_secreto_temporal',
       { expiresIn: '7d' }
     );
     
@@ -153,14 +151,13 @@ router.post('/cobrador/login', async (req, res) => {
       return res.status(401).json({ error: 'Credenciales inválidas' });
     }
     
-    const token = jwt.sign(
+    const token = signToken(
       { 
         id: user._id, 
         email: user.email, 
         rol: 'cobrador',
         tenantId: user.tenantId
       },
-      process.env.JWT_SECRET || 'tu_secreto_temporal',
       { expiresIn: '7d' }
     );
     

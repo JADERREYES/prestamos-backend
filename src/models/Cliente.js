@@ -8,7 +8,6 @@ const clienteSchema = new mongoose.Schema({
   cedula: {
     type: String,
     required: true,
-    unique: true,
     index: true
   },
   telefono: {
@@ -53,7 +52,6 @@ const clienteSchema = new mongoose.Schema({
 
 // Índices para búsquedas rápidas
 clienteSchema.index({ nombre: 1, tenantId: 1 });
-clienteSchema.index({ cedula: 1, tenantId: 1 }, { unique: true });
-clienteSchema.index({ cobrador: 1 });
+clienteSchema.index({ tenantId: 1, cedula: 1 }, { unique: true });
 
 module.exports = mongoose.model('Cliente', clienteSchema);
