@@ -11,6 +11,7 @@ const Prestamo = require("../models/Prestamo");
 const MensualidadOficina = require("../models/MensualidadOficina");
 const NotificacionOficina = require("../models/NotificacionOficina");
 const superadminController = require('../controllers/superadmin.controller');
+const { generarCodigoVinculacion } = require('../services/telegramCobrador.service');
 
 const { 
   generarPassword, 
@@ -197,6 +198,11 @@ router.post("/crear-oficina", isSuperAdmin, async (req, res) => {
       tenantId
     });
     await nuevoCobrador.save();
+    const codigoTelegram = await generarCodigoVinculacion({
+      cobrador: nuevoCobrador,
+      creadoPor: req.user._id,
+      creadoPorRol: req.user.rol
+    });
     console.log(`✅ Cobrador creado: ${cobradorEmail}`);
 
     // Verificación opcional
@@ -222,7 +228,13 @@ router.post("/crear-oficina", isSuperAdmin, async (req, res) => {
       },
       cobrador: {
         email: cobradorEmail,
-        password: cobradorPassword
+        password: cobradorPassword,
+        telegramVinculacion: {
+          codigo: codigoTelegram.codigo,
+          expiraEn: codigoTelegram.expiraEn,
+          cobradorId: nuevoCobrador._id,
+          tenantId: nuevoCobrador.tenantId
+        }
       }
     });
   } catch (err) {

@@ -9,11 +9,11 @@ const handleTelegramError = async (ctx, error) => {
   }
 };
 
-const replyLoginRequired = (ctx) => (
-  ctx.reply('Debes autenticarte primero con /login correo contrasena.')
+const replyUnlinkedAccount = (ctx) => (
+  ctx.reply('Tu cuenta de Telegram no esta vinculada. Solicita un codigo al administrador.')
 );
 
 module.exports = {
   handleTelegramError,
-  replyLoginRequired
+  replyUnlinkedAccount
 };

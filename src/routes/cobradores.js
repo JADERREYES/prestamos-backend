@@ -5,6 +5,7 @@ const Cobrador = require('../models/Cobrador');
 const Cliente = require('../models/Cliente');
 const Prestamo = require('../models/Prestamo');
 const { authMiddleware, adminOnly } = require('../middleware/auth');
+const { generarCodigoVinculacion } = require('../services/telegramCobrador.service');
 
 // Middleware para verificar tenantId
 router.use((req, res, next) => {
@@ -120,8 +121,22 @@ router.post('/', authMiddleware, adminOnly, async (req, res) => {
     const cobrador = new Cobrador(data);
     await cobrador.save();
 
+    const codigoTelegram = await generarCodigoVinculacion({
+      cobrador,
+      creadoPor: req.user.id,
+      creadoPorRol: req.user.rol
+    });
+
     const { password, ...cobradorData } = cobrador.toObject();
-    res.status(201).json(cobradorData);
+    res.status(201).json({
+      ...cobradorData,
+      telegramVinculacion: {
+        codigo: codigoTelegram.codigo,
+        expiraEn: codigoTelegram.expiraEn,
+        cobradorId: cobrador._id,
+        tenantId: cobrador.tenantId
+      }
+    });
   } catch (err) {
     console.error('❌ Error en POST /cobradores:', err);
     res.status(500).json({ error: err.message });
