@@ -7,7 +7,9 @@ const notificacionOficinaSchema = new mongoose.Schema(
       required: true,
       index: true,
       trim: true,
-      lowercase: true
+      lowercase: true,
+      maxlength: 64,
+      match: /^[a-z0-9_][a-z0-9_-]{1,63}$/
     },
     tipo: {
       type: String,
@@ -18,12 +20,14 @@ const notificacionOficinaSchema = new mongoose.Schema(
     titulo: {
       type: String,
       required: true,
-      trim: true
+      trim: true,
+      maxlength: 120
     },
     mensaje: {
       type: String,
       required: true,
-      trim: true
+      trim: true,
+      maxlength: 1000
     },
     leida: {
       type: Boolean,
@@ -71,5 +75,9 @@ const notificacionOficinaSchema = new mongoose.Schema(
 
 notificacionOficinaSchema.index({ tenantId: 1, createdAt: -1 });
 notificacionOficinaSchema.index({ tenantId: 1, leida: 1, createdAt: -1 });
+notificacionOficinaSchema.index(
+  { tenantId: 1, periodo: 1, tipo: 1, leida: 1 },
+  { unique: true, partialFilterExpression: { leida: false } }
+);
 
 module.exports = mongoose.model('NotificacionOficina', notificacionOficinaSchema);

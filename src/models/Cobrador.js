@@ -39,6 +39,24 @@ const cobradorSchema = new mongoose.Schema({
   activo: {
     type: Boolean,
     default: true
+  },
+  telegramChatId: {
+    type: String,
+    default: null,
+    index: true,
+    sparse: true
+  },
+  telegramUsername: {
+    type: String,
+    default: ''
+  },
+  telegramFirstName: {
+    type: String,
+    default: ''
+  },
+  telegramActivo: {
+    type: Boolean,
+    default: false
   }
 }, {
   timestamps: true
@@ -46,6 +64,7 @@ const cobradorSchema = new mongoose.Schema({
 
 cobradorSchema.index({ tenantId: 1, email: 1 }, { unique: true });
 cobradorSchema.index({ tenantId: 1, cedula: 1 }, { unique: true });
+cobradorSchema.index({ telegramChatId: 1, telegramActivo: 1 });
 
 // Hashear password antes de guardar
 cobradorSchema.pre('save', async function(next) {

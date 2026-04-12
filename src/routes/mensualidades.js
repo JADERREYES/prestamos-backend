@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const router = express.Router();
 
 const Admin = require('../models/Admin');
@@ -8,16 +9,29 @@ const Tenant = require('../models/Tenant');
 const { verifyToken } = require('../utils/jwt');
 const {
   calcularEstadoMensualidad,
+  createHttpError,
   crearMensualidadBase,
   getFechaVencimiento,
   getMontoMensualidad,
   getPeriodoActual,
-  normalizarTenantId,
+  handleMongoError,
   parsePeriodo,
-  serializarMensualidad
+  serializarMensualidad,
+  validarLongitud,
+  validarTenantId
 } = require('../utils/mensualidadOficina');
 
 const isSuperadminRole = (rol) => rol === 'superadmin' || rol === 'superadministrador';
+const MAX_TITULO = 120;
+const MAX_MENSAJE = 1000;
+const MAX_REFERENCIA = 80;
+const MAX_NOTAS = 500;
+
+const sendError = (res, error) => {
+  const normalized = handleMongoError(error);
+  const status = normalized.status || (normalized.name === 'ValidationError' ? 400 : 500);
+  return res.status(status).json({ error: normalized.message });
+};
 
 const requireSuperadmin = async (req, res, next) => {
   try {
@@ -28,9 +42,18 @@ const requireSuperadmin = async (req, res, next) => {
     }
 
     const decoded = verifyToken(token);
+
+    if (!mongoose.Types.ObjectId.isValid(decoded.id)) {
+      return res.status(401).json({ error: 'Token invalido' });
+    }
+
     const admin = await Admin.findById(decoded.id);
 
-    if (!admin || !isSuperadminRole(admin.rol)) {
+    if (!admin) {
+      return res.status(401).json({ error: 'Usuario no encontrado' });
+    }
+
+    if (!isSuperadminRole(admin.rol)) {
       return res.status(403).json({ error: 'No autorizado' });
     }
 
@@ -41,59 +64,73 @@ const requireSuperadmin = async (req, res, next) => {
       return res.status(401).json({ error: 'Token invalido' });
     }
 
-    return res.status(500).json({ error: error.message });
+    return sendError(res, error);
   }
 };
 
 const getPeriodoRequest = (req) => {
-  const periodo = req.query.periodo || req.body.periodo || getPeriodoActual();
+  const periodo = String(req.query.periodo || req.body.periodo || getPeriodoActual()).trim();
   parsePeriodo(periodo);
   return periodo;
 };
 
-const findTenantByTenantId = async (tenantId) => {
-  const tenantIdNormalizado = normalizarTenantId(tenantId);
-  return Tenant.findOne({ tenantId: tenantIdNormalizado });
+const findTenantByTenantId = async (tenantIdParam) => {
+  const tenantId = validarTenantId(tenantIdParam);
+  return Tenant.findOne({ tenantId });
 };
 
-const syncEstadoMensualidad = async (mensualidad) => {
-  const calculado = calcularEstadoMensualidad(mensualidad);
+const buildMensualidadPayload = (tenant, periodo, body, userId) => {
+  const tenantId = validarTenantId(tenant.tenantId);
+  const monto = body.monto !== undefined ? Number(body.monto) : getMontoMensualidad(tenant);
+  const fechaPago = body.fechaPago ? new Date(body.fechaPago) : new Date();
+  const ahora = new Date();
 
-  if (mensualidad.estado !== calculado.estado) {
-    mensualidad.estado = calculado.estado;
-    await mensualidad.save();
+  if (!Number.isFinite(monto) || monto < 0) {
+    throw createHttpError(400, 'Monto invalido');
   }
 
-  return mensualidad;
+  if (Number.isNaN(fechaPago.getTime())) {
+    throw createHttpError(400, 'Fecha de pago invalida');
+  }
+
+  if (fechaPago > ahora) {
+    throw createHttpError(400, 'La fecha de pago no puede ser futura');
+  }
+
+  return {
+    tenantId,
+    periodo,
+    monto,
+    fechaVencimiento: getFechaVencimiento(tenant, periodo),
+    fechaPago,
+    estado: 'pagado',
+    metodoPago: body.metodoPago || 'efectivo',
+    referencia: validarLongitud(body.referencia, 'referencia', MAX_REFERENCIA),
+    notas: validarLongitud(body.notas, 'notas', MAX_NOTAS),
+    registradoPor: userId
+  };
 };
 
 router.use(requireSuperadmin);
 
 router.get('/morosas', async (req, res) => {
   try {
-    const periodo = req.query.periodo || getPeriodoActual();
-    parsePeriodo(periodo);
+    const periodo = getPeriodoRequest(req);
+    const tenants = await Tenant.find({ estado: true }).sort({ nombre: 1 }).lean();
+    const tenantIds = tenants.map((tenant) => validarTenantId(tenant.tenantId));
+    const tenantById = new Map(tenants.map((tenant) => [validarTenantId(tenant.tenantId), tenant]));
 
-    const tenants = await Tenant.find({ estado: true }).sort({ nombre: 1 });
-    const morosas = [];
+    const mensualidades = await MensualidadOficina.find({
+      periodo,
+      tenantId: { $in: tenantIds }
+    }).lean();
 
-    for (const tenant of tenants) {
-      const base = crearMensualidadBase(tenant, periodo);
-      let mensualidad = await MensualidadOficina.findOne({
-        tenantId: base.tenantId,
-        periodo
-      });
-
-      if (mensualidad) {
-        mensualidad = await syncEstadoMensualidad(mensualidad);
-      }
-
-      const estado = serializarMensualidad(mensualidad || base, tenant);
-
-      if (estado.estado === 'vencido') {
-        morosas.push(estado);
-      }
-    }
+    const morosas = mensualidades
+      .map((mensualidad) => {
+        const tenant = tenantById.get(mensualidad.tenantId);
+        return tenant ? serializarMensualidad(mensualidad, tenant) : null;
+      })
+      .filter((mensualidad) => mensualidad && mensualidad.estado === 'vencido');
 
     res.json({
       periodo,
@@ -101,7 +138,7 @@ router.get('/morosas', async (req, res) => {
       mensualidades: morosas
     });
   } catch (error) {
-    res.status(error.status || 500).json({ error: error.message });
+    sendError(res, error);
   }
 });
 
@@ -113,22 +150,13 @@ router.get('/:tenantId', async (req, res) => {
       return res.status(404).json({ error: 'Oficina no encontrada' });
     }
 
-    const periodo = req.query.periodo || getPeriodoActual();
-    parsePeriodo(periodo);
-
-    const tenantId = normalizarTenantId(tenant.tenantId);
-    const mensualidadActual = await MensualidadOficina.findOne({ tenantId, periodo });
+    const periodo = getPeriodoRequest(req);
+    const tenantId = validarTenantId(tenant.tenantId);
+    const mensualidadActual = await MensualidadOficina.findOne({ tenantId, periodo }).lean();
     const historial = await MensualidadOficina.find({ tenantId })
       .sort({ periodo: -1 })
-      .limit(24);
-
-    for (const mensualidad of historial) {
-      await syncEstadoMensualidad(mensualidad);
-    }
-
-    const estadoActual = mensualidadActual
-      ? serializarMensualidad(await syncEstadoMensualidad(mensualidadActual), tenant)
-      : serializarMensualidad(crearMensualidadBase(tenant, periodo), tenant);
+      .limit(24)
+      .lean();
 
     res.json({
       tenant: {
@@ -137,11 +165,16 @@ router.get('/:tenantId', async (req, res) => {
         tenantId: tenant.tenantId
       },
       periodo,
-      estadoActual,
+      estadoActual: mensualidadActual
+        ? serializarMensualidad(mensualidadActual, tenant)
+        : {
+          ...serializarMensualidad(crearMensualidadBase(tenant, periodo), tenant),
+          persistida: false
+        },
       historial: historial.map((mensualidad) => serializarMensualidad(mensualidad, tenant))
     });
   } catch (error) {
-    res.status(error.status || 500).json({ error: error.message });
+    sendError(res, error);
   }
 });
 
@@ -154,50 +187,32 @@ router.post('/:tenantId/registrar-pago', async (req, res) => {
     }
 
     const periodo = getPeriodoRequest(req);
-    const tenantId = normalizarTenantId(tenant.tenantId);
+    const tenantId = validarTenantId(tenant.tenantId);
     const existente = await MensualidadOficina.findOne({ tenantId, periodo });
 
     if (existente?.estado === 'pagado' || existente?.fechaPago) {
-      return res.status(400).json({ error: 'La mensualidad de este periodo ya esta pagada' });
+      return res.status(409).json({ error: 'La mensualidad de este periodo ya esta pagada' });
     }
 
-    const monto = req.body.monto !== undefined
-      ? Number(req.body.monto)
-      : getMontoMensualidad(tenant);
-
-    if (!Number.isFinite(monto) || monto < 0) {
-      return res.status(400).json({ error: 'Monto invalido' });
-    }
-
-    const fechaPago = req.body.fechaPago ? new Date(req.body.fechaPago) : new Date();
-
-    if (Number.isNaN(fechaPago.getTime())) {
-      return res.status(400).json({ error: 'Fecha de pago invalida' });
-    }
-
-    const payload = {
-      tenantId,
-      periodo,
-      monto,
-      fechaVencimiento: getFechaVencimiento(tenant, periodo),
-      fechaPago,
-      estado: 'pagado',
-      metodoPago: req.body.metodoPago || 'efectivo',
-      referencia: req.body.referencia || '',
-      notas: req.body.notas || '',
-      registradoPor: req.user._id
-    };
-
+    const payload = buildMensualidadPayload(tenant, periodo, req.body, req.user._id);
     const mensualidad = existente
-      ? await MensualidadOficina.findOneAndUpdate({ tenantId, periodo }, payload, { new: true, runValidators: true })
+      ? await MensualidadOficina.findOneAndUpdate(
+        { tenantId, periodo, fechaPago: null },
+        payload,
+        { new: true, runValidators: true }
+      )
       : await MensualidadOficina.create(payload);
 
+    if (!mensualidad) {
+      return res.status(409).json({ error: 'La mensualidad ya fue modificada' });
+    }
+
     res.status(existente ? 200 : 201).json({
-      mensaje: 'Pago de mensualidad registrado correctamente',
+      mensaje: 'Mensualidad registrada como pagada',
       mensualidad: serializarMensualidad(mensualidad, tenant)
     });
   } catch (error) {
-    res.status(error.status || 500).json({ error: error.message });
+    sendError(res, error);
   }
 });
 
@@ -210,28 +225,39 @@ router.post('/:tenantId/notificar', async (req, res) => {
     }
 
     const periodo = getPeriodoRequest(req);
-    const tenantId = normalizarTenantId(tenant.tenantId);
+    const tenantId = validarTenantId(tenant.tenantId);
     let mensualidad = await MensualidadOficina.findOne({ tenantId, periodo });
 
     if (!mensualidad) {
-      mensualidad = new MensualidadOficina(crearMensualidadBase(tenant, periodo));
-      await mensualidad.save();
-      await syncEstadoMensualidad(mensualidad);
-    } else {
-      mensualidad = await syncEstadoMensualidad(mensualidad);
+      mensualidad = await MensualidadOficina.create(crearMensualidadBase(tenant, periodo));
     }
 
     const estado = serializarMensualidad(mensualidad, tenant);
 
     if (estado.estado !== 'vencido') {
-      return res.status(400).json({
+      return res.status(409).json({
         error: 'Solo se puede notificar una mensualidad vencida',
         estado: estado.estado
       });
     }
 
-    const titulo = req.body.titulo || 'Mensualidad vencida';
-    const mensaje = req.body.mensaje || `La mensualidad del periodo ${periodo} esta vencida. Dias de mora: ${estado.diasMora}.`;
+    const titulo = validarLongitud(req.body.titulo || 'Mensualidad vencida', 'titulo', MAX_TITULO);
+    const mensaje = validarLongitud(
+      req.body.mensaje || `La mensualidad del periodo ${periodo} esta vencida. Dias de mora: ${estado.diasMora}.`,
+      'mensaje',
+      MAX_MENSAJE
+    );
+
+    const notificacionExistente = await NotificacionOficina.findOne({
+      tenantId,
+      periodo,
+      tipo: 'mensualidad_morosa',
+      leida: false
+    });
+
+    if (notificacionExistente) {
+      return res.status(409).json({ error: 'Ya existe una notificacion activa para esta mensualidad' });
+    }
 
     const notificacion = await NotificacionOficina.create({
       tenantId,
@@ -248,22 +274,20 @@ router.post('/:tenantId/notificar', async (req, res) => {
       }
     });
 
-    const payloadSocket = {
-      _id: notificacion._id,
-      id: notificacion._id,
-      tenantId,
-      tipo: notificacion.tipo,
-      titulo: notificacion.titulo,
-      mensaje: notificacion.mensaje,
-      leida: notificacion.leida,
-      periodo: notificacion.periodo,
-      metadata: notificacion.metadata,
-      createdAt: notificacion.createdAt
-    };
-
     const io = req.app.get('io');
     if (io) {
-      io.to(`tenant-${tenantId}`).emit('notificacion-oficina', payloadSocket);
+      io.to(`tenant-${tenantId}`).emit('notificacion-oficina', {
+        _id: notificacion._id,
+        id: notificacion._id,
+        tenantId,
+        tipo: notificacion.tipo,
+        titulo: notificacion.titulo,
+        mensaje: notificacion.mensaje,
+        leida: notificacion.leida,
+        periodo: notificacion.periodo,
+        metadata: notificacion.metadata,
+        createdAt: notificacion.createdAt
+      });
     }
 
     res.status(201).json({
@@ -271,7 +295,7 @@ router.post('/:tenantId/notificar', async (req, res) => {
       notificacion
     });
   } catch (error) {
-    res.status(error.status || 500).json({ error: error.message });
+    sendError(res, error);
   }
 });
 

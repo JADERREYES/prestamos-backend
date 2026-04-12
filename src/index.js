@@ -6,6 +6,7 @@ const http = require('http');
 const dns = require('dns');
 const socketIo = require('socket.io');
 const { verifyToken } = require('./utils/jwt');
+const { setupTelegramWebhook } = require('./telegram/bot');
 
 const app = express();
 const server = http.createServer(app);
@@ -72,6 +73,7 @@ app.get('/api/test',(req,res)=> res.json({ message:"API funcionando correctament
 
 /* AUTH SIN TENANT */
 app.use('/api/auth', require('./routes/auth'));
+app.use('/api/telegram', require('./routes/telegram.webhook'));
 
 /* DECODIFICAR TOKEN GLOBAL */
 app.use((req,res,next)=>{
@@ -253,7 +255,8 @@ console.log('DNS configurado para MongoDB Atlas:', dns.getServers());
 mongoose.connect(process.env.MONGODB_URI, {
   serverSelectionTimeoutMS: 10000
 })
-  .then(() => {
+  .then(async () => {
+    await setupTelegramWebhook();
     console.log("✅ MongoDB conectado");
   })
   .catch(err => {

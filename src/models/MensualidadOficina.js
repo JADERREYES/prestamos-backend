@@ -7,7 +7,9 @@ const mensualidadOficinaSchema = new mongoose.Schema(
       required: true,
       index: true,
       trim: true,
-      lowercase: true
+      lowercase: true,
+      maxlength: 64,
+      match: /^[a-z0-9_][a-z0-9_-]{1,63}$/
     },
     periodo: {
       type: String,
@@ -42,7 +44,9 @@ const mensualidadOficinaSchema = new mongoose.Schema(
     },
     referencia: {
       type: String,
-      default: ''
+      default: '',
+      maxlength: 80,
+      trim: true
     },
     registradoPor: {
       type: mongoose.Schema.Types.ObjectId,
@@ -51,7 +55,9 @@ const mensualidadOficinaSchema = new mongoose.Schema(
     },
     notas: {
       type: String,
-      default: ''
+      default: '',
+      maxlength: 500,
+      trim: true
     }
   },
   {

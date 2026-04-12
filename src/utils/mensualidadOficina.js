@@ -1,8 +1,49 @@
 const MONTO_MENSUALIDAD_DEFAULT = 350000;
+const TENANT_ID_REGEX = /^[a-z0-9_][a-z0-9_-]{1,63}$/;
 
 const normalizarTenantId = (valor) => String(valor || '')
   .trim()
   .toLowerCase();
+
+const createHttpError = (status, message) => {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+};
+
+const handleMongoError = (error) => {
+  if (error?.code === 11000) {
+    return createHttpError(409, 'Ya existe un registro para este tenant y periodo');
+  }
+
+  return error;
+};
+
+const validarObjectId = (mongoose, id, nombre = 'id') => {
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    throw createHttpError(400, `${nombre} invalido`);
+  }
+};
+
+const validarTenantId = (tenantId) => {
+  const value = normalizarTenantId(tenantId);
+
+  if (!TENANT_ID_REGEX.test(value)) {
+    throw createHttpError(400, 'tenantId invalido');
+  }
+
+  return value;
+};
+
+const validarLongitud = (valor, nombre, max) => {
+  const value = String(valor || '').trim();
+
+  if (value.length > max) {
+    throw createHttpError(400, `${nombre} excede ${max} caracteres`);
+  }
+
+  return value;
+};
 
 const getPeriodoActual = (fecha = new Date()) => {
   const year = fecha.getFullYear();
@@ -15,18 +56,14 @@ const parsePeriodo = (periodo) => {
   const match = value.match(/^(\d{4})-(\d{2})$/);
 
   if (!match) {
-    const error = new Error('Periodo invalido. Use formato YYYY-MM');
-    error.status = 400;
-    throw error;
+    throw createHttpError(400, 'Periodo invalido. Use formato YYYY-MM');
   }
 
   const year = Number(match[1]);
   const month = Number(match[2]);
 
   if (month < 1 || month > 12) {
-    const error = new Error('Mes invalido en periodo');
-    error.status = 400;
-    throw error;
+    throw createHttpError(400, 'Mes invalido en periodo');
   }
 
   return { year, month };
@@ -113,11 +150,16 @@ const crearMensualidadBase = (tenant, periodo) => ({
 
 module.exports = {
   calcularEstadoMensualidad,
+  createHttpError,
   crearMensualidadBase,
   getFechaVencimiento,
   getMontoMensualidad,
   getPeriodoActual,
+  handleMongoError,
   normalizarTenantId,
   parsePeriodo,
-  serializarMensualidad
+  serializarMensualidad,
+  validarLongitud,
+  validarObjectId,
+  validarTenantId
 };

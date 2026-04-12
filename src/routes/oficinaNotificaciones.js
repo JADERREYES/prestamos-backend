@@ -1,8 +1,9 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const router = express.Router();
 
 const NotificacionOficina = require('../models/NotificacionOficina');
-const { normalizarTenantId } = require('../utils/mensualidadOficina');
+const { validarObjectId, validarTenantId } = require('../utils/mensualidadOficina');
 
 router.get('/', async (req, res) => {
   try {
@@ -10,7 +11,7 @@ router.get('/', async (req, res) => {
       return res.status(400).json({ error: 'Tenant no definido' });
     }
 
-    const tenantId = normalizarTenantId(req.tenantId);
+    const tenantId = validarTenantId(req.tenantId);
     const notificaciones = await NotificacionOficina.find({ tenantId })
       .sort({ createdAt: -1 })
       .limit(50);
@@ -31,7 +32,9 @@ router.patch('/:id/leida', async (req, res) => {
       return res.status(400).json({ error: 'Tenant no definido' });
     }
 
-    const tenantId = normalizarTenantId(req.tenantId);
+    validarObjectId(mongoose, req.params.id, 'notificacionId');
+
+    const tenantId = validarTenantId(req.tenantId);
     const notificacion = await NotificacionOficina.findOneAndUpdate(
       { _id: req.params.id, tenantId },
       { leida: true, fechaLeida: new Date() },
