@@ -84,9 +84,9 @@ const showMainMenu = async (ctx) => {
     '',
     'Elige una opcion:',
     '➕ Crear Cliente',
-    '💵 Nuevo Credito',
+    '💵 Nuevo Crédito',
     '💰 Registrar Pago',
-    '👥 Ver Mis Clientes',
+    '👥 Mis Clientes',
     '📊 Mi Estado',
     '❓ Ayuda'
   ].join('\n'), mainKeyboard);
@@ -215,7 +215,7 @@ const startCrearPrestamoCommand = async (ctx) => {
 
   startPrestamoSession(ctx.chat?.id);
   await ctx.reply([
-    '💵 Nuevo Credito',
+    '💵 Nuevo Crédito',
     '',
     '1/4 Cedula del cliente.',
     'Escribe cancelar para salir.'
@@ -726,6 +726,19 @@ const conversationRouter = async (ctx) => {
   return false;
 };
 
+const BUTTON_LABELS = {
+  crearCliente: ['➕ Crear Cliente', 'Crear Cliente', 'Crear cliente'],
+  nuevoCredito: ['💵 Nuevo Crédito', '💵 Nuevo Credito', 'Nuevo Crédito', 'Nuevo Credito', 'Crear prestamo', 'Crear préstamo'],
+  registrarPago: ['💰 Registrar Pago', 'Registrar Pago', 'Registrar pago'],
+  misClientes: ['👥 Mis Clientes', '👥 Ver Mis Clientes', 'Mis Clientes', 'Ver mis clientes'],
+  miEstado: ['📊 Mi Estado', 'Mi Estado', 'Estado'],
+  ayuda: ['❓ Ayuda', 'Ayuda']
+};
+
+const registerButtonHears = (bot, labels, handler) => {
+  labels.forEach((label) => bot.hears(label, handler));
+};
+
 const registerCommands = (bot) => {
   bot.start(startCommand);
   bot.help(helpCommand);
@@ -739,17 +752,12 @@ const registerCommands = (bot) => {
   bot.command('cliente', startCrearClienteCommand);
   bot.command('prestamo', startCrearPrestamoCommand);
   bot.command('pago', startRegistrarPagoCommand);
-  bot.hears('➕ Crear Cliente', startCrearClienteCommand);
-  bot.hears('Crear cliente', startCrearClienteCommand);
-  bot.hears('💵 Nuevo Credito', startCrearPrestamoCommand);
-  bot.hears('Crear prestamo', startCrearPrestamoCommand);
-  bot.hears('💰 Registrar Pago', startRegistrarPagoCommand);
-  bot.hears('Registrar pago', startRegistrarPagoCommand);
-  bot.hears('👥 Ver Mis Clientes', misClientesCommand);
-  bot.hears('Ver mis clientes', misClientesCommand);
-  bot.hears('📊 Mi Estado', pingCommand);
-  bot.hears('❓ Ayuda', helpCommand);
-  bot.hears('Ayuda', helpCommand);
+  registerButtonHears(bot, BUTTON_LABELS.crearCliente, startCrearClienteCommand);
+  registerButtonHears(bot, BUTTON_LABELS.nuevoCredito, startCrearPrestamoCommand);
+  registerButtonHears(bot, BUTTON_LABELS.registrarPago, startRegistrarPagoCommand);
+  registerButtonHears(bot, BUTTON_LABELS.misClientes, misClientesCommand);
+  registerButtonHears(bot, BUTTON_LABELS.miEstado, pingCommand);
+  registerButtonHears(bot, BUTTON_LABELS.ayuda, helpCommand);
   bot.on('text', conversationRouter);
 };
 
