@@ -61,6 +61,51 @@ const obtenerClientesDelCobradorTelegram = async (chatId) => {
   return { cobrador, clientes };
 };
 
+const crearClienteDesdeTelegram = async ({ cobrador, nombre, cedula, telefono }) => {
+  const nombreFinal = String(nombre || '').trim();
+  const cedulaFinal = String(cedula || '').trim();
+  const telefonoFinal = String(telefono || '').trim();
+
+  if (!cobrador) {
+    throw createPublicError('Tu cuenta de Telegram no esta vinculada. Solicita un codigo al administrador.');
+  }
+
+  if (!nombreFinal || nombreFinal.length < 3 || nombreFinal.length > 80) {
+    throw createPublicError('El nombre debe tener entre 3 y 80 caracteres.');
+  }
+
+  if (!cedulaFinal || cedulaFinal.length < 5 || cedulaFinal.length > 30) {
+    throw createPublicError('La cedula debe tener entre 5 y 30 caracteres.');
+  }
+
+  if (!telefonoFinal || telefonoFinal.length < 7 || telefonoFinal.length > 20) {
+    throw createPublicError('El telefono debe tener entre 7 y 20 caracteres.');
+  }
+
+  const existe = await Cliente.findOne({
+    cedula: cedulaFinal,
+    tenantId: cobrador.tenantId
+  });
+
+  if (existe) {
+    throw createPublicError('Ya existe un cliente con esa cedula en esta oficina.');
+  }
+
+  const cliente = await Cliente.create({
+    nombre: nombreFinal,
+    cedula: cedulaFinal,
+    telefono: telefonoFinal,
+    direccion: '',
+    email: '',
+    tipo: 'nuevo',
+    cobrador: cobrador._id,
+    tenantId: cobrador.tenantId,
+    activo: true
+  });
+
+  return cliente;
+};
+
 const generarCodigoVinculacion = async ({ cobrador, creadoPor, creadoPorRol }) => {
   const ahora = new Date();
   const expiraEn = new Date(ahora.getTime() + CODIGO_TTL_MINUTOS * 60 * 1000);
@@ -169,6 +214,7 @@ const vincularTelegramConCodigo = async ({ codigo, chatId, from }) => {
 };
 
 module.exports = {
+  crearClienteDesdeTelegram,
   generarCodigoVinculacion,
   obtenerCobradorPorChat,
   obtenerClientesDelCobradorTelegram,
