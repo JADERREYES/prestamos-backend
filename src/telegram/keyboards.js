@@ -1,9 +1,9 @@
 const mainKeyboard = {
   reply_markup: {
     keyboard: [
-      [{ text: 'Ver mis clientes' }],
-      [{ text: 'Crear cliente' }, { text: 'Crear prestamo' }],
-      [{ text: 'Registrar pago' }, { text: 'Ayuda' }]
+      [{ text: '➕ Crear Cliente' }, { text: '💵 Nuevo Credito' }],
+      [{ text: '💰 Registrar Pago' }, { text: '👥 Ver Mis Clientes' }],
+      [{ text: '📊 Mi Estado' }, { text: '❓ Ayuda' }]
     ],
     resize_keyboard: true
   }
