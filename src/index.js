@@ -74,6 +74,7 @@ app.get('/api/test',(req,res)=> res.json({ message:"API funcionando correctament
 /* AUTH SIN TENANT */
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/telegram', require('./routes/telegram.webhook'));
+app.use('/api/ia', require('./routes/ia.routes'));
 
 /* DECODIFICAR TOKEN GLOBAL */
 app.use((req,res,next)=>{

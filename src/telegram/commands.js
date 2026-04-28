@@ -1,5 +1,6 @@
 const { mainKeyboard } = require('./keyboards');
 const { replyUnlinkedAccount } = require('./handlers');
+const { responderConRAG } = require('../services/rag.service');
 const {
   clearConversationSession,
   getAuthenticatedCobrador,
@@ -38,6 +39,7 @@ const HELP_TEXT = [
   '/misclientes - Ver clientes asignados',
   '/ping - Ver conexion',
   '/estado - Ver estado',
+  '/ia PREGUNTA - Consultar IA de tu oficina',
   '/vincular CODIGO - Vincular este chat',
   '/miid - Ver datos basicos del chat'
 ].join('\n');
@@ -152,6 +154,54 @@ const pingCommand = async (ctx) => {
     `👤 Cobrador: ${cobrador.nombre}`,
     `🏢 Oficina: ${cobrador.tenantId}`
   ].join('\n'), mainKeyboard);
+};
+
+const iaCommand = async (ctx) => {
+  clearConversationSession(ctx.chat?.id);
+
+  const rawText = String(ctx.message?.text || '').trim();
+  const pregunta = rawText.replace(/^\/ia(?:@\S+)?\s*/i, '').trim();
+
+  console.log('Telegram IA | chatId:', ctx.chat?.id);
+  console.log('Telegram IA | from:', ctx.from?.id, ctx.from?.username || '');
+
+  if (!pregunta) {
+    await ctx.reply('Escribe tu pregunta después del comando. Ejemplo: /ia ¿Cada cuánto paga el cliente?', mainKeyboard);
+    return;
+  }
+
+  try {
+    const cobrador = await getAuthenticatedCobrador(ctx);
+
+    if (!cobrador) {
+      await ctx.reply('Tu cuenta de Telegram no está vinculada. Usa /vincular CODIGO para continuar.', mainKeyboard);
+      return;
+    }
+
+    if (!cobrador.tenantId) {
+      await ctx.reply('No se encontró la oficina asociada a tu usuario.', mainKeyboard);
+      return;
+    }
+
+    console.log('Telegram IA | cobradorId:', String(cobrador._id));
+    console.log('Telegram IA | cobradorNombre:', cobrador.nombre);
+    console.log('Telegram IA | tenantId:', cobrador.tenantId);
+    console.log('Telegram IA | pregunta:', pregunta);
+
+    const resultado = await responderConRAG(pregunta, {
+      tenantId: cobrador.tenantId
+    });
+
+    console.log('Telegram IA | documentos usados:', Array.isArray(resultado?.documentos) ? resultado.documentos.length : 0);
+
+    await ctx.reply(
+      resultado?.respuesta || 'No tengo información suficiente en los documentos de esta empresa para responder.',
+      mainKeyboard
+    );
+  } catch (error) {
+    console.error('Telegram IA | error:', error.message);
+    await ctx.reply('Ocurrió un error consultando la IA. Intenta nuevamente.', mainKeyboard);
+  }
 };
 
 const misClientesCommand = async (ctx) => {
@@ -746,6 +796,7 @@ const registerCommands = (bot) => {
   bot.command('vincular', vincularCommand);
   bot.command('ping', pingCommand);
   bot.command('estado', pingCommand);
+  bot.command('ia', iaCommand);
   bot.command('miid', whoAmICommand);
   bot.command('whoami', whoAmICommand);
   bot.command('misclientes', misClientesCommand);
