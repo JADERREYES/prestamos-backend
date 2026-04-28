@@ -67,24 +67,34 @@ router.post('/vinculacion/cobradores/:id/generar-codigo', requireAdminOrSuperadm
     const cobrador = await getCobradorAutorizado(req, res);
     if (!cobrador) return;
 
-    const linkCode = await generarCodigoVinculacion({
+    const { doc: linkCode, ttlMinutos } = await generarCodigoVinculacion({
       cobrador,
       creadoPor: req.user._id,
-      creadoPorRol: req.user.rol
+      creadoPorRol: req.user.rol,
+      duracion: req.body?.duracion,
+      unidad: req.body?.unidad
     });
 
     res.status(201).json({
+      ok: true,
       codigo: linkCode.codigo,
+      comando: `/vincular ${linkCode.codigo}`,
       expiraEn: linkCode.expiraEn,
+      ttlMinutos,
       cobradorId: cobrador._id,
-      tenantId: cobrador.tenantId
+      tenantId: cobrador.tenantId,
+      mensaje: 'Código generado correctamente'
     });
   } catch (error) {
-    if (error.code === 11000) {
-      return res.status(409).json({ error: 'Conflicto generando codigo de vinculacion' });
+    if (error.code === 'TELEGRAM_TTL_INVALID') {
+      return res.status(400).json({ ok: false, error: error.message });
     }
 
-    return res.status(500).json({ error: error.message });
+    if (error.code === 11000) {
+      return res.status(409).json({ ok: false, error: 'Conflicto generando codigo de vinculacion' });
+    }
+
+    return res.status(500).json({ ok: false, error: error.message });
   }
 });
 

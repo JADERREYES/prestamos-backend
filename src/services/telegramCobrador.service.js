@@ -4,7 +4,14 @@ const Pago = require('../models/Pago');
 const Prestamo = require('../models/Prestamo');
 const CodigoVinculacionTelegram = require('../models/CodigoVinculacionTelegram');
 
-const CODIGO_TTL_MINUTOS = 15;
+const DEFAULT_CODIGO_TTL_MINUTOS = 1440;
+const MIN_CODIGO_TTL_MINUTOS = 5;
+const MAX_CODIGO_TTL_MINUTOS = 30 * 24 * 60;
+const DURACION_UNIDADES = {
+  minutos: 1,
+  horas: 60,
+  dias: 24 * 60
+};
 
 const normalizeChatId = (chatId) => {
   if (chatId === undefined || chatId === null) return null;
@@ -16,6 +23,12 @@ const normalizeCodigo = (codigo) => String(codigo || '').trim().toUpperCase();
 const createPublicError = (message) => {
   const error = new Error(message);
   error.publicMessage = message;
+  return error;
+};
+
+const createValidationError = (message) => {
+  const error = new Error(message);
+  error.code = 'TELEGRAM_TTL_INVALID';
   return error;
 };
 
@@ -32,6 +45,53 @@ const buildTelegramProfile = (from = {}) => ({
   telegramUsername: from.username || '',
   telegramFirstName: from.first_name || ''
 });
+
+const getDefaultCodigoTtlMinutos = () => {
+  const configured = Number(process.env.TELEGRAM_CODIGO_TTL_MINUTOS);
+
+  if (!Number.isFinite(configured) || configured <= 0) {
+    return DEFAULT_CODIGO_TTL_MINUTOS;
+  }
+
+  return configured;
+};
+
+const resolveCodigoTtlMinutos = ({ duracion, unidad }) => {
+  const hasManualDuration = duracion !== undefined && duracion !== null && duracion !== '';
+  const hasManualUnit = unidad !== undefined && unidad !== null && String(unidad).trim() !== '';
+
+  if (!hasManualDuration && !hasManualUnit) {
+    return getDefaultCodigoTtlMinutos();
+  }
+
+  const duracionNumero = Number(duracion);
+  if (!Number.isFinite(duracionNumero) || duracionNumero <= 0) {
+    throw createValidationError('La duracion debe ser un numero positivo');
+  }
+
+  if (!Number.isInteger(duracionNumero)) {
+    throw createValidationError('La duracion debe ser un numero entero');
+  }
+
+  const unidadNormalizada = String(unidad || '').trim().toLowerCase();
+  const multiplier = DURACION_UNIDADES[unidadNormalizada];
+
+  if (!multiplier) {
+    throw createValidationError('Unidad invalida. Usa minutos, horas o dias');
+  }
+
+  const ttlMinutos = duracionNumero * multiplier;
+
+  if (ttlMinutos < MIN_CODIGO_TTL_MINUTOS) {
+    throw createValidationError(`La duracion minima es ${MIN_CODIGO_TTL_MINUTOS} minutos`);
+  }
+
+  if (ttlMinutos > MAX_CODIGO_TTL_MINUTOS) {
+    throw createValidationError('La duracion maxima permitida es 30 dias');
+  }
+
+  return ttlMinutos;
+};
 
 const obtenerCobradorPorChat = async (chatId) => {
   const telegramChatId = normalizeChatId(chatId);
@@ -390,9 +450,16 @@ const registrarPagoDesdeTelegram = async ({ cobrador, prestamoId, monto }) => {
   };
 };
 
-const generarCodigoVinculacion = async ({ cobrador, creadoPor, creadoPorRol }) => {
+const generarCodigoVinculacion = async ({
+  cobrador,
+  creadoPor,
+  creadoPorRol,
+  duracion,
+  unidad
+}) => {
   const ahora = new Date();
-  const expiraEn = new Date(ahora.getTime() + CODIGO_TTL_MINUTOS * 60 * 1000);
+  const ttlMinutos = resolveCodigoTtlMinutos({ duracion, unidad });
+  const expiraEn = new Date(ahora.getTime() + ttlMinutos * 60 * 1000);
 
   await CodigoVinculacionTelegram.updateMany(
     {
@@ -415,7 +482,15 @@ const generarCodigoVinculacion = async ({ cobrador, creadoPor, creadoPorRol }) =
         creadoPorRol
       });
 
-      return doc;
+      console.log('Telegram vinculacion | codigo generado:', {
+        cobradorId: String(cobrador._id),
+        tenantId: cobrador.tenantId,
+        codigo: doc.codigo,
+        ttlMinutos,
+        expiraEn: doc.expiraEn.toISOString()
+      });
+
+      return { doc, ttlMinutos };
     } catch (error) {
       if (error.code !== 11000) throw error;
     }
@@ -429,6 +504,12 @@ const vincularTelegramConCodigo = async ({ codigo, chatId, from }) => {
   const telegramChatId = normalizeChatId(chatId);
   const ahora = new Date();
 
+  console.log('Telegram vinculacion | validando codigo:', {
+    codigo: codigoNormalizado,
+    fechaActual: ahora.toISOString(),
+    chatId: telegramChatId
+  });
+
   if (!codigoNormalizado) {
     throw createPublicError('Debes enviar un codigo de vinculacion.');
   }
@@ -439,9 +520,17 @@ const vincularTelegramConCodigo = async ({ codigo, chatId, from }) => {
 
   const linkCode = await CodigoVinculacionTelegram.findOne({ codigo: codigoNormalizado });
 
+  console.log('Telegram vinculacion | codigo existe:', Boolean(linkCode));
+
   if (!linkCode) {
     throw createPublicError('El codigo de vinculacion no es valido.');
   }
+
+  console.log('Telegram vinculacion | estado codigo:', {
+    usado: linkCode.estado === 'usado',
+    vencido: linkCode.estado === 'vencido' || linkCode.estado === 'expirado' || linkCode.expiraEn <= ahora,
+    expiraEn: linkCode.expiraEn?.toISOString?.() || String(linkCode.expiraEn)
+  });
 
   if (linkCode.estado === 'usado') {
     throw createPublicError('Este codigo de vinculacion ya fue usado.');
@@ -509,5 +598,6 @@ module.exports = {
   obtenerCobradorPorChat,
   obtenerClientesDelCobradorTelegram,
   registrarPagoDesdeTelegram,
+  resolveCodigoTtlMinutos,
   vincularTelegramConCodigo,
 };
