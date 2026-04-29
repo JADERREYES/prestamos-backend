@@ -1,6 +1,7 @@
 const { mainKeyboard } = require('./keyboards');
 const { replyUnlinkedAccount } = require('./handlers');
 const { responderConRAG } = require('../services/rag.service');
+const { procesarPreguntaOperativa } = require('../services/telegramIaOperativa.service');
 const {
   clearConversationSession,
   getAuthenticatedCobrador,
@@ -187,6 +188,21 @@ const iaCommand = async (ctx) => {
     console.log('Telegram IA | cobradorNombre:', cobrador.nombre);
     console.log('Telegram IA | tenantId:', cobrador.tenantId);
     console.log('Telegram IA | pregunta:', pregunta);
+
+    const resultadoOperativo = await procesarPreguntaOperativa({
+      pregunta,
+      tenantId: cobrador.tenantId,
+      cobrador
+    });
+
+    if (resultadoOperativo?.manejada) {
+      console.log('Telegram IA | respuesta operativa generada');
+      await ctx.reply(
+        resultadoOperativo.respuesta,
+        mainKeyboard
+      );
+      return;
+    }
 
     const resultado = await responderConRAG(pregunta, {
       tenantId: cobrador.tenantId
