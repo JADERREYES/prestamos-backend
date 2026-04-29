@@ -53,6 +53,30 @@ const INTENT_PATTERNS = [
   { intent: 'saldo', patterns: ['saldo pendiente', 'cuanto debe', 'saldo', 'deuda', 'debe', 'pendiente'] }
 ];
 
+const GENERAL_ONLY_PATTERNS = [
+  'pagos pendientes',
+  'cobros pendientes',
+  'cartera pendiente',
+  'quien debe',
+  'clientes pendientes',
+  'prestamos activos',
+  'prestamo activo',
+  'creditos activos',
+  'credito activo',
+  'creditos pagados',
+  'credito pagado',
+  'prestamos pagados'
+];
+
+const NAME_HINT_PATTERNS = [
+  /\bde\s+([a-záéíóúñ][a-záéíóúñ\s]+)$/i,
+  /\bcliente\s+([a-záéíóúñ][a-záéíóúñ\s]+)$/i,
+  /\bsaldo de\s+([a-záéíóúñ][a-záéíóúñ\s]+)$/i,
+  /\bcuotas de\s+([a-záéíóúñ][a-záéíóúñ\s]+)$/i,
+  /\bultimo pago de\s+([a-záéíóúñ][a-záéíóúñ\s]+)$/i,
+  /\búltimo pago de\s+([a-záéíóúñ][a-záéíóúñ\s]+)$/i
+];
+
 const detectIntent = (pregunta) => {
   const normalized = normalizeText(pregunta);
 
@@ -128,6 +152,25 @@ const stripNameNoise = (pregunta) => {
   return cleaned;
 };
 
+const extractExplicitName = (pregunta) => {
+  const plainQuestion = String(pregunta || '').trim();
+
+  for (const pattern of NAME_HINT_PATTERNS) {
+    const match = plainQuestion.match(pattern);
+    if (match?.[1]) {
+      const name = stripNameNoise(match[1]);
+      if (name) return name;
+    }
+  }
+
+  return '';
+};
+
+const isGeneralOnlyQuestion = (pregunta) => {
+  const normalized = normalizeText(pregunta);
+  return GENERAL_ONLY_PATTERNS.some((pattern) => normalized === pattern);
+};
+
 const findClienteByCedula = async ({ tenantId, cedula }) => Cliente.findOne({
   tenantId,
   cedula: String(cedula || '').trim(),
@@ -173,6 +216,12 @@ const buildMultipleMatchesResponse = (clientes) => [
 
 const resolveClienteContext = async ({ pregunta, tenantId }) => {
   const cedula = extractCedula(pregunta);
+  const explicitName = extractExplicitName(pregunta);
+  const generalOnlyQuestion = isGeneralOnlyQuestion(pregunta);
+
+  console.log('Telegram IA operativa | tieneCedula:', Boolean(cedula));
+  console.log('Telegram IA operativa | nombreDetectado:', explicitName || '');
+  console.log('Telegram IA operativa | esConsultaGeneral:', generalOnlyQuestion || (!cedula && !explicitName));
 
   if (cedula) {
     const cliente = await findClienteByCedula({ tenantId, cedula });
@@ -191,8 +240,7 @@ const resolveClienteContext = async ({ pregunta, tenantId }) => {
     };
   }
 
-  const possibleName = stripNameNoise(pregunta);
-  if (!possibleName) {
+  if (generalOnlyQuestion || !explicitName) {
     console.log('Telegram IA operativa | tipo búsqueda: general');
     return {
       searchType: 'general',
@@ -201,9 +249,9 @@ const resolveClienteContext = async ({ pregunta, tenantId }) => {
     };
   }
 
-  const matches = await findClientesByNombre({ tenantId, name: possibleName });
+  const matches = await findClientesByNombre({ tenantId, name: explicitName });
   console.log('Telegram IA operativa | tipo búsqueda: nombre');
-  console.log('Telegram IA operativa | nombre extraído:', possibleName);
+  console.log('Telegram IA operativa | nombre extraído:', explicitName);
   console.log('Telegram IA operativa | coincidencias:', matches.length);
   if (!matches.length) {
     return {
@@ -399,7 +447,7 @@ const handlePendientesIntent = async ({ tenantId, pregunta }) => {
     .populate('clienteId', 'nombre cedula')
     .sort({ createdAt: -1 })
     .lean();
-  console.log('Telegram IA operativa | resultados pendientes:', prestamos.length);
+  console.log('Telegram IA operativa | cantidad de préstamos encontrados:', prestamos.length);
 
   const pendientes = prestamos
     .map((prestamo) => ({
@@ -441,7 +489,7 @@ const handlePrestamosIntent = async ({ tenantId, pregunta }) => {
     .sort({ createdAt: -1 })
     .limit(MAX_RESULTS)
     .lean();
-  console.log('Telegram IA operativa | resultados préstamos:', prestamos.length);
+  console.log('Telegram IA operativa | cantidad de préstamos encontrados:', prestamos.length);
 
   if (!prestamos.length) {
     return {
