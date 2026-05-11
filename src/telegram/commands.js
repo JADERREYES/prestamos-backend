@@ -1,6 +1,8 @@
 const { mainKeyboard } = require('./keyboards');
 const { replyUnlinkedAccount } = require('./handlers');
 const { responderConRAG } = require('../services/rag.service');
+const Tenant = require('../models/Tenant');
+const { contarDocumentosPorTenant } = require('../services/vectorSearch.service');
 const {
   detectIntent: detectOperationalIntent,
   extractCedula,
@@ -63,6 +65,10 @@ const HELP_TEXT = [
 
 const DOCUMENTAL_KEYWORDS = [
   'requisito',
+  'requisitos',
+  'equisito',
+  'equisitos',
+  'equisitos',
   'politica',
   'manual',
   'procedimiento',
@@ -77,6 +83,9 @@ const DOCUMENTAL_KEYWORDS = [
   'preguntas frecuentes',
   'faq',
   'que hago',
+  'que se necesita',
+  'que documentos necesita',
+  'condiciones para aprobar',
   'como debo',
   'como se debe',
   'mora'
@@ -85,7 +94,23 @@ const DOCUMENTAL_KEYWORDS = [
 const GREETING_PATTERNS = ['hola', 'buenas', 'buen dia', 'buenos dias', 'buenas tardes', 'buenas noches', 'hey', 'hello'];
 const HELP_PATTERNS = ['ayuda', 'help', 'que puedes hacer', 'que haces', 'comandos'];
 const CREATE_CLIENT_PATTERNS = ['crear cliente', 'nuevo cliente', 'registrar cliente'];
-const CREATE_PRESTAMO_PATTERNS = ['crear prestamo', 'crear prestamo nuevo', 'nuevo prestamo', 'crear credito', 'nuevo credito'];
+const CREATE_PRESTAMO_PATTERNS = [
+  'crear prestamo',
+  'crear prestamo nuevo',
+  'nuevo prestamo',
+  'crear credito',
+  'nuevo credito',
+  'registrar prestamo',
+  'prestamo para',
+  'credito para',
+  'hacerle un credito',
+  'crearle un prestamo',
+  'hacer un credito',
+  'voy a crearle un prestamo',
+  'quiero hacerle un credito',
+  'necesito crear un credito',
+  'le voy a prestar'
+];
 const CREATE_PAGO_PATTERNS = ['registrar pago', 'nuevo pago', 'crear pago'];
 
 const formatMoney = (value) => Number(value || 0).toLocaleString('es-CO');
@@ -119,6 +144,63 @@ const buildUnknownText = () => (
   'No entendi tu mensaje. Prueba con algo como: saldo Angela, pagos pendientes, registrar pago o requisitos para aprobar prestamo.'
 );
 
+const isSimilarWord = (word, target) => {
+  if (!word || !target) return false;
+  if (word === target) return true;
+  if (Math.abs(word.length - target.length) > 1) return false;
+
+  let mismatches = 0;
+  let i = 0;
+  let j = 0;
+
+  while (i < word.length && j < target.length) {
+    if (word[i] === target[j]) {
+      i += 1;
+      j += 1;
+      continue;
+    }
+
+    mismatches += 1;
+    if (mismatches > 1) return false;
+
+    if (word.length > target.length) {
+      i += 1;
+    } else if (word.length < target.length) {
+      j += 1;
+    } else {
+      i += 1;
+      j += 1;
+    }
+  }
+
+  if (i < word.length || j < target.length) {
+    mismatches += 1;
+  }
+
+  return mismatches <= 1;
+};
+
+const containsDocumentalIntent = (normalized) => {
+  if (DOCUMENTAL_KEYWORDS.some((keyword) => normalized.includes(keyword))) {
+    return true;
+  }
+
+  const words = normalized.split(' ').filter(Boolean);
+  return words.some((word) => (
+    isSimilarWord(word, 'requisito') ||
+    isSimilarWord(word, 'requisitos') ||
+    isSimilarWord(word, 'politica') ||
+    isSimilarWord(word, 'mora')
+  ));
+};
+
+const extractCreatePrestamoHint = (normalized) => {
+  const parts = normalized.split(/\b(?:para|a)\b/i).map((part) => part.trim()).filter(Boolean);
+  const candidate = parts.at(-1) || '';
+  if (!candidate) return '';
+  return extractExplicitName(candidate);
+};
+
 const classifyTelegramText = (rawText) => {
   const normalized = normalizeOperationalText(rawText);
   const operationalIntent = detectOperationalIntent(normalized);
@@ -126,14 +208,15 @@ const classifyTelegramText = (rawText) => {
   const explicitName = extractExplicitName(normalized);
   const hasClientLookupIntent = /\b(saldo|deuda|debe|estado|historial|cuotas|ultimo pago|ultimo abono)\b/.test(normalized);
   const hasClientStatusNarrative = /^[a-z]+\s+(esta|tiene)\b/.test(normalized) && /\b(mora|atrasad)/.test(normalized);
+  const createPrestamoHint = extractCreatePrestamoHint(normalized);
   const hasClientEntity = Boolean(hasCedula || (hasClientLookupIntent && explicitName) || hasClientStatusNarrative);
-  const isDocumental = DOCUMENTAL_KEYWORDS.some((keyword) => normalized.includes(keyword));
+  const isDocumental = containsDocumentalIntent(normalized);
 
   if (!normalized) return { type: 'desconocido' };
   if (GREETING_PATTERNS.includes(normalized)) return { type: 'saludo' };
   if (HELP_PATTERNS.includes(normalized)) return { type: 'ayuda' };
   if (matchesAnyPattern(normalized, CREATE_CLIENT_PATTERNS)) return { type: 'crear_cliente' };
-  if (matchesAnyPattern(normalized, CREATE_PRESTAMO_PATTERNS)) return { type: 'crear_prestamo' };
+  if (matchesAnyPattern(normalized, CREATE_PRESTAMO_PATTERNS)) return { type: 'crear_prestamo', clienteHint: createPrestamoHint };
   if (matchesAnyPattern(normalized, CREATE_PAGO_PATTERNS)) return { type: 'registrar_pago' };
   if (isDocumental && (operationalIntent || hasClientEntity)) return { type: 'mixto' };
   if (isDocumental) return { type: 'documental' };
@@ -226,11 +309,35 @@ const pingCommand = async (ctx) => {
     return;
   }
 
-  await ctx.reply([
+  let tenantName = '';
+  let documentosActivos = null;
+
+  try {
+    const [tenant, totalDocs] = await Promise.all([
+      Tenant.findOne({ tenantId: cobrador.tenantId }).select('nombre tenantId').lean(),
+      contarDocumentosPorTenant(cobrador.tenantId)
+    ]);
+    tenantName = tenant?.nombre || '';
+    documentosActivos = totalDocs;
+  } catch (error) {
+    console.error('Telegram estado | error diagnosticando tenant:', error.message);
+  }
+
+  const lines = [
     'Bot conectado al backend',
     `Cobrador: ${cobrador.nombre}`,
-    `Oficina: ${cobrador.tenantId}`
-  ].join('\n'), mainKeyboard);
+    `TenantId: ${cobrador.tenantId}`
+  ];
+
+  if (tenantName) {
+    lines.push(`Oficina: ${tenantName}`);
+  }
+
+  if (process.env.NODE_ENV !== 'production' && documentosActivos !== null) {
+    lines.push(`Documentos IA activos: ${documentosActivos}`);
+  }
+
+  await ctx.reply(lines.join('\n'), mainKeyboard);
 };
 
 const runIaFlow = async ({ ctx, pregunta, cobrador, classificationType = 'operativo' }) => {
@@ -254,6 +361,9 @@ const runIaFlow = async ({ ctx, pregunta, cobrador, classificationType = 'operat
     tenantId: cobrador.tenantId,
     userRole: 'cobrador'
   });
+
+  console.log('Telegram IA | tenantId RAG:', cobrador.tenantId);
+  console.log('Telegram IA | documentos RAG:', Array.isArray(resultadoDocumental?.documentos) ? resultadoDocumental.documentos.length : 0);
 
   if (classificationType === 'documental') {
     await ctx.reply(
@@ -372,7 +482,7 @@ const startCrearClienteCommand = async (ctx) => {
   ].join('\n'));
 };
 
-const startCrearPrestamoCommand = async (ctx) => {
+const startCrearPrestamoCommand = async (ctx, options = {}) => {
   clearConversationSession(ctx.chat?.id);
   const cobrador = await getAuthenticatedCobrador(ctx);
 
@@ -381,7 +491,20 @@ const startCrearPrestamoCommand = async (ctx) => {
     return;
   }
 
-  startPrestamoSession(ctx.chat?.id);
+  const suggestedClienteNombre = String(options.clienteHint || '').trim();
+  startPrestamoSession(ctx.chat?.id, suggestedClienteNombre ? { suggestedClienteNombre } : {});
+
+  if (suggestedClienteNombre) {
+    await ctx.reply([
+      `Claro. Vamos a crear un prestamo para ${suggestedClienteNombre}.`,
+      'Primero necesito confirmar la cedula o seleccionar el cliente.',
+      '',
+      '1/4 Cedula del cliente.',
+      'Escribe cancelar para salir.'
+    ].join('\n'));
+    return;
+  }
+
   await ctx.reply([
     'Nuevo Credito',
     '',
@@ -939,7 +1062,7 @@ const handleFreeTextWithoutSession = async (ctx) => {
   }
 
   if (classification.type === 'crear_prestamo') {
-    await startCrearPrestamoCommand(ctx);
+    await startCrearPrestamoCommand(ctx, { clienteHint: classification.clienteHint });
     return true;
   }
 

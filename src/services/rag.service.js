@@ -4,6 +4,10 @@ const {
   contarDocumentosPorTenant
 } = require('./vectorSearch.service');
 
+const buildTenantDebugSuffix = (tenantId) => (
+  process.env.NODE_ENV === 'production' ? '' : ` Verifica que el PDF este subido al tenantId: ${tenantId}.`
+);
+
 const responderConRAG = async (pregunta, opciones = {}) => {
   const preguntaNormalizada = String(pregunta || '').trim();
 
@@ -24,7 +28,7 @@ const responderConRAG = async (pregunta, opciones = {}) => {
   if (!totalDocumentosTenant) {
     return {
       pregunta: preguntaNormalizada,
-      respuesta: 'Todavia no tengo documentos cargados para esta empresa. Un administrador debe subir el manual o las politicas en PDF.',
+      respuesta: `No encontre documentos activos para esta empresa.${buildTenantDebugSuffix(opciones.tenantId)}`,
       documentos: []
     };
   }

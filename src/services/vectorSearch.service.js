@@ -27,6 +27,8 @@ const normalizeDocumentGroupId = (documentGroupId) => {
   return value || null;
 };
 
+const isDocumentActive = (documento) => documento?.activo !== false;
+
 const canUseGlobalContext = (options = {}) => (
   Boolean(options.allowGlobal) && isSuperAdminRole(options.userRole)
 );
@@ -139,14 +141,20 @@ const buscarDocumentosSimilares = async (pregunta, opciones = {}) => {
         limit: topK,
         ...(normalizedTenantId ? {
           filter: {
-            tenantId: normalizedTenantId,
-            activo: true
+            tenantId: normalizedTenantId
           }
         } : {
-          filter: {
-            activo: true
-          }
+          filter: {}
         })
+      }
+    },
+    {
+      $match: {
+        $or: [
+          { activo: true },
+          { activo: { $exists: false } },
+          { activo: null }
+        ]
       }
     },
     {
@@ -172,7 +180,7 @@ const buscarDocumentosSimilares = async (pregunta, opciones = {}) => {
   ];
 
   const resultados = await DocumentoVectorial.aggregate(pipeline);
-  return resultados;
+  return resultados.filter(isDocumentActive);
 };
 
 const listarDocumentosPorTenant = async (tenantId) => {
@@ -191,7 +199,7 @@ const contarDocumentosPorTenant = async (tenantId, opciones = {}) => {
   const query = { tenantId: normalizedTenantId };
 
   if (opciones.soloActivos !== false) {
-    query.activo = true;
+    query.activo = { $ne: false };
   }
 
   return DocumentoVectorial.countDocuments(query);
@@ -257,6 +265,52 @@ const eliminarDocumentoGrupoPorTenant = async (tenantId, documentGroupId) => {
   });
 };
 
+const migrarDocumentosLegacyPorTenant = async (tenantId) => {
+  const normalizedTenantId = normalizeTenantId(tenantId);
+  const DocumentoVectorial = getDocumentoVectorialModel();
+  const legacyDocs = await DocumentoVectorial.find({
+    tenantId: normalizedTenantId,
+    $or: [
+      { activo: { $exists: false } },
+      { sourceType: { $exists: false } },
+      { fileName: { $exists: false } },
+      { documentGroupId: { $exists: false } }
+    ]
+  }).select('_id titulo metadata activo sourceType fileName documentGroupId').lean();
+
+  if (!legacyDocs.length) {
+    return { matchedCount: 0, modifiedCount: 0 };
+  }
+
+  let modifiedCount = 0;
+
+  for (const doc of legacyDocs) {
+    const sourceType = doc.sourceType || doc.metadata?.tipo || 'text';
+    const fileName = doc.fileName || doc.metadata?.originalName || doc.titulo || '';
+    const documentGroupId = doc.documentGroupId || String(doc._id);
+    const activo = doc.activo !== false;
+
+    const result = await DocumentoVectorial.updateOne(
+      { _id: doc._id },
+      {
+        $set: {
+          activo,
+          sourceType,
+          fileName,
+          documentGroupId
+        }
+      }
+    );
+
+    modifiedCount += result.modifiedCount || 0;
+  }
+
+  return {
+    matchedCount: legacyDocs.length,
+    modifiedCount
+  };
+};
+
 module.exports = {
   contarDocumentosPorTenant,
   desactivarDocumentoGrupoPorTenant,
@@ -265,5 +319,6 @@ module.exports = {
   guardarDocumentoVectorial,
   buscarDocumentosSimilares,
   listarDocumentosPorTenant,
+  migrarDocumentosLegacyPorTenant,
   normalizeTenantId
 };

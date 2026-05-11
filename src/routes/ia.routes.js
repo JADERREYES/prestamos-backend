@@ -14,6 +14,7 @@ const {
   eliminarDocumentoGrupoPorTenant,
   guardarDocumentoVectorial,
   listarDocumentosPorTenant,
+  migrarDocumentosLegacyPorTenant,
   normalizeTenantId
 } = require('../services/vectorSearch.service');
 
@@ -573,6 +574,26 @@ router.patch('/tenants/:tenantId/documentos/grupo/:documentGroupId/desactivar', 
     });
   } catch (error) {
     console.error('IA | Error desactivando grupo documental:', error.message);
+    return res.status(error.statusCode || 500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
+
+router.post('/tenants/:tenantId/documentos/migrar-legacy', requireSuperAdmin, async (req, res) => {
+  try {
+    const tenant = await getTenantByTenantId(req.params.tenantId);
+    const resultado = await migrarDocumentosLegacyPorTenant(tenant.tenantId);
+
+    return res.json({
+      ok: true,
+      tenantId: tenant.tenantId,
+      revisados: resultado.matchedCount || 0,
+      actualizados: resultado.modifiedCount || 0
+    });
+  } catch (error) {
+    console.error('IA | Error migrando documentos legacy:', error.message);
     return res.status(error.statusCode || 500).json({
       ok: false,
       error: error.message
