@@ -10,7 +10,7 @@ const handleTelegramError = async (ctx, error) => {
 };
 
 const replyUnlinkedAccount = (ctx) => (
-  ctx.reply('Tu cuenta de Telegram no esta vinculada. Solicita un codigo al administrador.')
+  ctx.reply('Tu cuenta de Telegram no esta vinculada. Solicita un codigo al administrador y usa /vincular CODIGO.')
 );
 
 module.exports = {

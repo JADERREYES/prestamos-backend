@@ -8,7 +8,11 @@ const normalizeText = (text) => String(text || '')
   .normalize('NFD')
   .replace(/[\u0300-\u036f]/g, '')
   .toLowerCase()
+  .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+  .replace(/\s+/g, ' ')
   .trim();
+
+const escapeRegex = (value) => String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const formatMoney = (value) => `$${Number(value || 0).toLocaleString('es-CO')}`;
 
@@ -45,44 +49,129 @@ const getCuotasPendientesEstimadas = (prestamo) => {
   return Math.max(plazo - pagadas, 0);
 };
 
-const INTENT_PATTERNS = [
-  { intent: 'ultimo_pago', patterns: ['ultimo pago', 'ultimo abono', 'cuando pago', 'fecha de pago'] },
-  { intent: 'cuotas', patterns: ['cuantas cuotas', 'cuotas pagadas', 'cuotas pendientes', 'cuantas le faltan', 'cuota', 'cuotas'] },
-  { intent: 'pendientes', patterns: ['pagos pendientes', 'cobros pendientes', 'cartera pendiente', 'quien debe', 'clientes pendientes', 'pendientes'] },
-  { intent: 'prestamos', patterns: ['prestamo activo', 'prestamos activos', 'credito activo', 'creditos activos', 'credito pagado', 'creditos pagados', 'prestamos pagados'] },
-  { intent: 'saldo', patterns: ['saldo pendiente', 'cuanto debe', 'saldo', 'deuda', 'debe', 'pendiente'] }
+const OPERATIONAL_INTENTS = [
+  {
+    intent: 'pagos_hoy',
+    patterns: ['pagos de hoy', 'que pagos tengo hoy', 'cobros de hoy', 'pagos hoy', 'cobros hoy'],
+    requiresClient: false
+  },
+  {
+    intent: 'resumen_oficina',
+    patterns: ['resumen de mi oficina', 'resumen oficina', 'resumen de oficina', 'estado de mi oficina', 'mi resumen'],
+    requiresClient: false
+  },
+  {
+    intent: 'clientes_morosos',
+    patterns: ['clientes morosos', 'morosos', 'clientes en mora', 'clientes atrasados', 'cartera vencida'],
+    requiresClient: false
+  },
+  {
+    intent: 'pendientes',
+    patterns: ['pagos pendientes', 'cobros pendientes', 'cartera pendiente', 'quien debe', 'clientes pendientes', 'pendientes'],
+    requiresClient: false
+  },
+  {
+    intent: 'prestamos_activos',
+    patterns: ['prestamos activos', 'prestamo activo', 'creditos activos', 'credito activo'],
+    requiresClient: false
+  },
+  {
+    intent: 'prestamos_pagados',
+    patterns: ['prestamos pagados', 'prestamo pagado', 'creditos pagados', 'credito pagado'],
+    requiresClient: false
+  },
+  {
+    intent: 'historial',
+    patterns: ['historial de', 'historial', 'movimientos de', 'pagos de', 'estado de'],
+    requiresClient: true
+  },
+  {
+    intent: 'ultimo_pago',
+    patterns: ['ultimo pago', 'ultimo abono', 'cuando pago', 'fecha de pago'],
+    requiresClient: true
+  },
+  {
+    intent: 'cuotas',
+    patterns: ['cuantas cuotas', 'cuotas pagadas', 'cuotas pendientes', 'cuantas le faltan', 'cuota', 'cuotas'],
+    requiresClient: true
+  },
+  {
+    intent: 'saldo',
+    patterns: ['saldo pendiente', 'cuanto debe', 'saldo', 'deuda', 'debe', 'estado'],
+    requiresClient: true
+  }
 ];
 
-const GENERAL_ONLY_PATTERNS = [
+const CLIENT_REQUIRED_HELP = {
+  saldo: 'Claro. Para consultar el saldo necesito la cedula o el nombre del cliente. Ejemplo: saldo Angela o saldo 1234567890.',
+  historial: 'Para revisar el historial necesito la cedula o el nombre del cliente. Ejemplo: historial Angela o historial 1234567890.',
+  cuotas: 'Para revisar las cuotas necesito la cedula o el nombre del cliente. Ejemplo: cuotas Angela o cuotas 1234567890.',
+  ultimo_pago: 'Para revisar el ultimo pago necesito la cedula o el nombre del cliente. Ejemplo: ultimo pago Angela o ultimo pago 1234567890.'
+};
+
+const NOISE_PHRASES = [
+  'cuanto debe la cedula',
+  'cuanto debe el cliente',
+  'cuanto debe',
+  'saldo de la cedula',
+  'saldo de',
+  'saldo',
+  'deuda de',
+  'deuda',
+  'estado de',
+  'estado',
+  'historial de',
+  'historial',
+  'ultimo pago de',
+  'ultimo pago',
+  'ultimo abono de',
+  'ultimo abono',
+  'cuando pago',
+  'fecha de pago de',
+  'fecha de pago',
+  'cuotas pendientes de',
+  'cuotas pagadas de',
+  'cuantas cuotas tiene la cedula',
+  'cuantas cuotas tiene el cliente',
+  'cuantas cuotas tiene',
+  'cuantas le faltan a',
+  'cuotas de',
+  'cuotas',
+  'cliente',
+  'cedula',
+  'la cedula',
+  'pagos pendientes de',
   'pagos pendientes',
+  'cobros pendientes de',
   'cobros pendientes',
+  'cartera pendiente de',
   'cartera pendiente',
-  'quien debe',
-  'clientes pendientes',
+  'prestamos activos de',
   'prestamos activos',
   'prestamo activo',
   'creditos activos',
-  'credito activo',
+  'prestamos pagados',
   'creditos pagados',
-  'credito pagado',
-  'prestamos pagados'
-];
-
-const NAME_HINT_PATTERNS = [
-  /\bde\s+([a-záéíóúñ][a-záéíóúñ\s]+)$/i,
-  /\bcliente\s+([a-záéíóúñ][a-záéíóúñ\s]+)$/i,
-  /\bsaldo de\s+([a-záéíóúñ][a-záéíóúñ\s]+)$/i,
-  /\bcuotas de\s+([a-záéíóúñ][a-záéíóúñ\s]+)$/i,
-  /\bultimo pago de\s+([a-záéíóúñ][a-záéíóúñ\s]+)$/i,
-  /\búltimo pago de\s+([a-záéíóúñ][a-záéíóúñ\s]+)$/i
+  'moroso',
+  'morosos',
+  'mora',
+  'atrasado',
+  'atrasada',
+  'que hago si',
+  'que hago',
+  'que pagos tengo hoy',
+  'pagos de hoy',
+  'resumen de mi oficina',
+  'resumen de oficina',
+  'resumen oficina'
 ];
 
 const detectIntent = (pregunta) => {
   const normalized = normalizeText(pregunta);
 
-  for (const config of INTENT_PATTERNS) {
+  for (const config of OPERATIONAL_INTENTS) {
     if (config.patterns.some((pattern) => normalized.includes(pattern))) {
-      return config.intent;
+      return config;
     }
   }
 
@@ -92,106 +181,79 @@ const detectIntent = (pregunta) => {
 const extractCedula = (pregunta) => {
   const matches = String(pregunta || '').match(/\d{5,30}/g);
   if (!matches?.length) return null;
-
   return matches.sort((a, b) => b.length - a.length)[0];
 };
 
 const stripNameNoise = (pregunta) => {
   let cleaned = normalizeText(pregunta);
-  const phrases = [
-    'ultimo pago de',
-    'ultimo pago',
-    'ultimo abono de',
-    'ultimo abono',
-    'cuando pago',
-    'fecha de pago de',
-    'fecha de pago',
-    'cuantas cuotas tiene el cliente',
-    'cuantas cuotas tiene la cedula',
-    'cuantas cuotas tiene',
-    'cuantas le faltan a',
-    'cuotas pendientes de',
-    'cuotas pagadas de',
-    'saldo pendiente de',
-    'saldo de',
-    'deuda de',
-    'cuanto debe el cliente',
-    'cuanto debe la cedula',
-    'cuanto debe',
-    'este cliente tiene cobros pendientes',
-    'este cliente tiene pagos pendientes',
-    'cliente',
-    'cedula',
-    'saldo',
-    'deuda',
-    'debe',
-    'cuotas',
-    'cuota',
-    'pendientes',
-    'pagos pendientes de',
-    'pagos pendientes',
-    'cobros pendientes de',
-    'cobros pendientes',
-    'prestamos activos de',
-    'prestamos activos',
-    'creditos activos de',
-    'creditos activos',
-    'creditos pagados de',
-    'creditos pagados',
-    'prestamos pagados'
-  ];
 
-  phrases.forEach((phrase) => {
+  NOISE_PHRASES.forEach((phrase) => {
     cleaned = cleaned.replaceAll(phrase, ' ');
   });
 
   cleaned = cleaned.replace(/\d{5,30}/g, ' ');
-  cleaned = cleaned.replace(/[^\p{L}\s]/gu, ' ');
+  cleaned = cleaned.replace(/\b(la|el|los|las|del|de|al|para|por|hoy|mi|oficina|cliente)\b/g, ' ');
   cleaned = cleaned.replace(/\s+/g, ' ').trim();
 
-  return cleaned;
+  if (!cleaned) return '';
+
+  return cleaned
+    .split(' ')
+    .filter((part) => part.length > 1)
+    .join(' ');
 };
 
 const extractExplicitName = (pregunta) => {
-  const plainQuestion = String(pregunta || '').trim();
+  const cleaned = stripNameNoise(pregunta);
+  return cleaned || '';
+};
 
-  for (const pattern of NAME_HINT_PATTERNS) {
-    const match = plainQuestion.match(pattern);
-    if (match?.[1]) {
-      const name = stripNameNoise(match[1]);
-      if (name) return name;
-    }
+const buildClienteQuery = ({ tenantId, cobrador }) => {
+  const query = {
+    tenantId,
+    activo: true
+  };
+
+  if (cobrador?._id) {
+    query.cobrador = cobrador._id;
   }
 
-  return '';
+  return query;
 };
 
-const isGeneralOnlyQuestion = (pregunta) => {
-  const normalized = normalizeText(pregunta);
-  return GENERAL_ONLY_PATTERNS.some((pattern) => normalized === pattern);
-};
-
-const findClienteByCedula = async ({ tenantId, cedula }) => Cliente.findOne({
-  tenantId,
-  cedula: String(cedula || '').trim(),
-  activo: true
+const findClienteByCedula = async ({ tenantId, cedula, cobrador }) => Cliente.findOne({
+  ...buildClienteQuery({ tenantId, cobrador }),
+  cedula: String(cedula || '').trim()
 }).lean();
 
-const findClientesByNombre = async ({ tenantId, name }) => Cliente.find({
-  tenantId,
-  activo: true,
-  nombre: { $regex: name, $options: 'i' }
-})
-  .select('nombre cedula telefono tenantId createdAt')
-  .sort({ nombre: 1 })
-  .limit(MAX_RESULTS + 1)
-  .lean();
+const findClientesByNombre = async ({ tenantId, name, cobrador }) => {
+  const normalizedName = normalizeText(name);
+  const tokens = normalizedName.split(' ').filter(Boolean);
+  const regexPattern = tokens.map((token) => escapeRegex(token)).join('.*');
+
+  return Cliente.find({
+    ...buildClienteQuery({ tenantId, cobrador }),
+    nombre: { $regex: regexPattern, $options: 'i' }
+  })
+    .select('nombre cedula telefono tenantId createdAt cobrador')
+    .sort({ nombre: 1 })
+    .limit(MAX_RESULTS + 1)
+    .lean();
+};
 
 const findPrestamosByCliente = async ({ tenantId, clienteId }) => Prestamo.find({
   tenantId,
   clienteId
 })
   .sort({ createdAt: -1 })
+  .lean();
+
+const findPagosByCliente = async ({ tenantId, clienteId, limite = 5 }) => Pago.find({
+  tenantId,
+  clienteId
+})
+  .sort({ fecha: -1, createdAt: -1 })
+  .limit(limite)
   .lean();
 
 const findUltimoPagoCliente = async ({ tenantId, clienteId }) => Pago.findOne({
@@ -210,28 +272,16 @@ const selectReferencePrestamo = (prestamos) => {
 };
 
 const buildMultipleMatchesResponse = (clientes) => [
-  'Encontré varios clientes parecidos. Escribe la cédula para mayor precisión.',
-  ...clientes.slice(0, MAX_RESULTS).map((cliente, index) => `${index + 1}. ${cliente.nombre} - Cédula ${cliente.cedula}`)
+  'Encontre varios clientes parecidos. Escribe la cedula para mayor precision.',
+  ...clientes.slice(0, MAX_RESULTS).map((cliente, index) => `${index + 1}. ${cliente.nombre} - Cedula ${cliente.cedula}`)
 ].join('\n');
 
-const resolveClienteContext = async ({ pregunta, tenantId }) => {
+const resolveClienteContext = async ({ pregunta, tenantId, cobrador, intentConfig }) => {
   const cedula = extractCedula(pregunta);
   const explicitName = extractExplicitName(pregunta);
-  const generalOnlyQuestion = isGeneralOnlyQuestion(pregunta);
-
-  console.log('Telegram IA operativa | tieneCedula:', Boolean(cedula));
-  console.log('Telegram IA operativa | nombreDetectado:', explicitName || '');
-  console.log('Telegram IA operativa | esConsultaGeneral:', generalOnlyQuestion || (!cedula && !explicitName));
 
   if (cedula) {
-    const cliente = await findClienteByCedula({ tenantId, cedula });
-    console.log('Telegram IA operativa | tipo búsqueda: cédula');
-    console.log('Telegram IA operativa | cédula extraída:', cedula);
-    console.log('Telegram IA operativa | cliente encontrado:', cliente ? {
-      id: String(cliente._id),
-      nombre: cliente.nombre,
-      cedula: cliente.cedula
-    } : null);
+    const cliente = await findClienteByCedula({ tenantId, cedula, cobrador });
     return {
       searchType: 'cedula',
       cedula,
@@ -240,19 +290,17 @@ const resolveClienteContext = async ({ pregunta, tenantId }) => {
     };
   }
 
-  if (generalOnlyQuestion || !explicitName) {
-    console.log('Telegram IA operativa | tipo búsqueda: general');
+  if (!explicitName) {
     return {
-      searchType: 'general',
+      searchType: 'missing',
       cliente: null,
-      multiple: false
+      multiple: false,
+      message: CLIENT_REQUIRED_HELP[intentConfig?.intent] || CLIENT_REQUIRED_HELP.saldo
     };
   }
 
-  const matches = await findClientesByNombre({ tenantId, name: explicitName });
-  console.log('Telegram IA operativa | tipo búsqueda: nombre');
-  console.log('Telegram IA operativa | nombre extraído:', explicitName);
-  console.log('Telegram IA operativa | coincidencias:', matches.length);
+  const matches = await findClientesByNombre({ tenantId, name: explicitName, cobrador });
+
   if (!matches.length) {
     return {
       searchType: 'nombre',
@@ -277,46 +325,74 @@ const resolveClienteContext = async ({ pregunta, tenantId }) => {
   };
 };
 
-const handleSaldoIntent = async ({ tenantId, pregunta }) => {
-  const context = await resolveClienteContext({ pregunta, tenantId });
+const buildScopedPrestamoQuery = async ({ tenantId, cobrador, estados }) => {
+  const query = {
+    tenantId
+  };
+
+  if (estados?.length) {
+    query.estado = { $in: estados };
+  }
+
+  if (!cobrador?._id) {
+    return query;
+  }
+
+  const clientes = await Cliente.find(buildClienteQuery({ tenantId, cobrador })).select('_id').lean();
+  const clienteIds = clientes.map((cliente) => cliente._id);
+
+  if (!clienteIds.length) {
+    return null;
+  }
+
+  query.clienteId = { $in: clienteIds };
+  return query;
+};
+
+const buildMissingClientResponse = (context) => ({
+  manejada: true,
+  respuesta: context.message || CLIENT_REQUIRED_HELP.saldo
+});
+
+const handleSaldoIntent = async ({ tenantId, pregunta, cobrador, intentConfig }) => {
+  const context = await resolveClienteContext({ pregunta, tenantId, cobrador, intentConfig });
 
   if (context.multiple) {
     return { manejada: true, respuesta: buildMultipleMatchesResponse(context.matches) };
   }
 
   if (!context.cliente) {
+    if (context.searchType === 'missing') {
+      return buildMissingClientResponse(context);
+    }
+
     return {
       manejada: true,
       respuesta: context.searchType === 'cedula'
-        ? 'No encontré un cliente con esa cédula en tu oficina.'
-        : 'No encontré ese cliente en tu oficina.'
+        ? 'No encontre un cliente con esa cedula en tu cartera.'
+        : 'No encontre ese cliente en tu cartera.'
     };
   }
 
   const prestamos = await findPrestamosByCliente({ tenantId, clienteId: context.cliente._id });
-  console.log('Telegram IA operativa | préstamos encontrados para saldo:', prestamos.length);
   if (!prestamos.length) {
-    return { manejada: true, respuesta: 'El cliente no tiene créditos activos.' };
+    return { manejada: true, respuesta: `El cliente ${context.cliente.nombre} no tiene creditos activos.` };
   }
 
   const saldoTotal = prestamos.reduce((sum, prestamo) => sum + getSaldoPendiente(prestamo), 0);
   const prestamoReferencia = selectReferencePrestamo(prestamos);
   const ultimoPago = await findUltimoPagoCliente({ tenantId, clienteId: context.cliente._id });
-  console.log('Telegram IA operativa | préstamo referencia saldo:', prestamoReferencia ? {
-    id: String(prestamoReferencia._id),
-    estado: prestamoReferencia.estado
-  } : null);
 
   if (saldoTotal <= 0) {
     return {
       manejada: true,
-      respuesta: `El cliente ${context.cliente.nombre} no tiene saldo pendiente. Su crédito aparece como ${prestamoReferencia?.estado || 'pagado'}.`
+      respuesta: `El cliente ${context.cliente.nombre} no tiene saldo pendiente. Su credito aparece como ${prestamoReferencia?.estado || 'pagado'}.`
     };
   }
 
   const parts = [
-    `El cliente ${context.cliente.nombre}, cédula ${context.cliente.cedula}, tiene un saldo pendiente de ${formatMoney(saldoTotal)}.`,
-    `El crédito está ${prestamoReferencia?.estado || 'activo'}.`
+    `${context.cliente.nombre}, cedula ${context.cliente.cedula}, tiene un saldo pendiente de ${formatMoney(saldoTotal)}.`,
+    `Estado del credito: ${prestamoReferencia?.estado || 'activo'}.`
   ];
 
   if (prestamoReferencia?.capital !== undefined) {
@@ -324,7 +400,7 @@ const handleSaldoIntent = async ({ tenantId, pregunta }) => {
   }
 
   if (ultimoPago) {
-    parts.push(`Último pago registrado: ${formatMoney(ultimoPago.monto)} el ${formatDate(ultimoPago.fecha)}.`);
+    parts.push(`Ultimo pago registrado: ${formatMoney(ultimoPago.monto)} el ${formatDate(ultimoPago.fecha)}.`);
   }
 
   return {
@@ -333,39 +409,37 @@ const handleSaldoIntent = async ({ tenantId, pregunta }) => {
   };
 };
 
-const handleCuotasIntent = async ({ tenantId, pregunta }) => {
-  const context = await resolveClienteContext({ pregunta, tenantId });
+const handleCuotasIntent = async ({ tenantId, pregunta, cobrador, intentConfig }) => {
+  const context = await resolveClienteContext({ pregunta, tenantId, cobrador, intentConfig });
 
   if (context.multiple) {
     return { manejada: true, respuesta: buildMultipleMatchesResponse(context.matches) };
   }
 
   if (!context.cliente) {
+    if (context.searchType === 'missing') {
+      return buildMissingClientResponse(context);
+    }
+
     return {
       manejada: true,
       respuesta: context.searchType === 'cedula'
-        ? 'No encontré un cliente con esa cédula en tu oficina.'
-        : 'No encontré ese cliente en tu oficina.'
+        ? 'No encontre un cliente con esa cedula en tu cartera.'
+        : 'No encontre ese cliente en tu cartera.'
     };
   }
 
   const prestamos = await findPrestamosByCliente({ tenantId, clienteId: context.cliente._id });
   const prestamo = selectReferencePrestamo(prestamos);
-  console.log('Telegram IA operativa | préstamos encontrados para cuotas:', prestamos.length);
-  console.log('Telegram IA operativa | préstamo referencia cuotas:', prestamo ? {
-    id: String(prestamo._id),
-    estado: prestamo.estado,
-    plazo: prestamo.plazo
-  } : null);
 
   if (!prestamo) {
-    return { manejada: true, respuesta: 'El cliente no tiene créditos activos.' };
+    return { manejada: true, respuesta: `El cliente ${context.cliente.nombre} no tiene creditos activos.` };
   }
 
   if (!prestamo.plazo) {
     return {
       manejada: true,
-      respuesta: 'El crédito del cliente existe, pero el sistema no tiene registrado el número total de cuotas.'
+      respuesta: 'El credito existe, pero el sistema no tiene registrado el numero total de cuotas.'
     };
   }
 
@@ -374,80 +448,147 @@ const handleCuotasIntent = async ({ tenantId, pregunta }) => {
   const cuotasPendientes = getCuotasPendientesEstimadas(prestamo);
   const valorCuota = getValorCuota(prestamo);
   const saldoPendiente = getSaldoPendiente(prestamo);
-  const multipleActivos = prestamos.filter((item) => ['activo', 'vencido'].includes(item.estado)).length > 1;
 
   const parts = [
-    `El cliente ${context.cliente.nombre} tiene un crédito de ${totalCuotas} cuotas.`
+    `${context.cliente.nombre} tiene un credito de ${totalCuotas} cuotas.`
   ];
 
   if (cuotasPagadas !== null) {
-    parts.push(`Ha pagado ${cuotasPagadas} cuotas`);
+    parts.push(`Ha pagado ${cuotasPagadas} cuotas.`);
   }
 
   if (cuotasPendientes !== null) {
-    parts.push(`y le faltan ${cuotasPendientes}.`);
-  } else {
-    parts.push('');
+    parts.push(`Le faltan ${cuotasPendientes}.`);
   }
 
   if (valorCuota !== null) {
-    parts.push(`Valor de cuota estimado: ${formatMoney(valorCuota)}.`);
+    parts.push(`Valor estimado por cuota: ${formatMoney(valorCuota)}.`);
   }
 
   parts.push(`Saldo pendiente: ${formatMoney(saldoPendiente)}.`);
-  parts.push(`Estado del crédito: ${prestamo.estado}.`);
-
-  if (multipleActivos) {
-    parts.push('Tomé como referencia el crédito activo más reciente del cliente.');
-  }
+  parts.push(`Estado del credito: ${prestamo.estado}.`);
 
   return {
     manejada: true,
-    respuesta: parts.join(' ').replace(/\s+\./g, '.')
+    respuesta: parts.join(' ')
   };
 };
 
-const handlePendientesIntent = async ({ tenantId, pregunta }) => {
-  const context = await resolveClienteContext({ pregunta, tenantId });
+const handleHistorialIntent = async ({ tenantId, pregunta, cobrador, intentConfig }) => {
+  const context = await resolveClienteContext({ pregunta, tenantId, cobrador, intentConfig });
 
-  if (context.searchType !== 'general') {
-    if (context.multiple) {
-      return { manejada: true, respuesta: buildMultipleMatchesResponse(context.matches) };
-    }
+  if (context.multiple) {
+    return { manejada: true, respuesta: buildMultipleMatchesResponse(context.matches) };
+  }
 
-    if (!context.cliente) {
-      return {
-        manejada: true,
-        respuesta: context.searchType === 'cedula'
-          ? 'No encontré un cliente con esa cédula en tu oficina.'
-          : 'No encontré ese cliente en tu oficina.'
-      };
-    }
-
-    const prestamos = await findPrestamosByCliente({ tenantId, clienteId: context.cliente._id });
-    const saldo = prestamos.reduce((sum, prestamo) => sum + getSaldoPendiente(prestamo), 0);
-
-    if (saldo <= 0) {
-      return {
-        manejada: true,
-        respuesta: `El cliente ${context.cliente.nombre} no tiene cobros pendientes.`
-      };
+  if (!context.cliente) {
+    if (context.searchType === 'missing') {
+      return buildMissingClientResponse(context);
     }
 
     return {
       manejada: true,
-      respuesta: `Sí. El cliente ${context.cliente.nombre}, cédula ${context.cliente.cedula}, tiene un saldo pendiente de ${formatMoney(saldo)}.`
+      respuesta: context.searchType === 'cedula'
+        ? 'No encontre un cliente con esa cedula en tu cartera.'
+        : 'No encontre ese cliente en tu cartera.'
     };
   }
 
-  const prestamos = await Prestamo.find({
+  const prestamos = await findPrestamosByCliente({ tenantId, clienteId: context.cliente._id });
+  const pagos = await findPagosByCliente({ tenantId, clienteId: context.cliente._id, limite: 3 });
+  const saldoTotal = prestamos.reduce((sum, prestamo) => sum + getSaldoPendiente(prestamo), 0);
+  const prestamoReferencia = selectReferencePrestamo(prestamos);
+
+  const parts = [
+    `Historial de ${context.cliente.nombre}, cedula ${context.cliente.cedula}.`
+  ];
+
+  if (prestamoReferencia) {
+    parts.push(`Credito de referencia: ${prestamoReferencia.estado}.`);
+    parts.push(`Saldo pendiente: ${formatMoney(saldoTotal)}.`);
+
+    if (getSaldoPendiente(prestamoReferencia) > 0 && new Date(prestamoReferencia.fechaVencimiento) < new Date()) {
+      parts.push(`El credito aparece vencido desde ${formatDate(prestamoReferencia.fechaVencimiento)}.`);
+    }
+  } else {
+    parts.push('No tiene creditos registrados.');
+  }
+
+  if (pagos.length) {
+    parts.push([
+      'Ultimos pagos:',
+      ...pagos.map((pago, index) => `${index + 1}. ${formatMoney(pago.monto)} el ${formatDate(pago.fecha)}`)
+    ].join('\n'));
+  } else {
+    parts.push('No tiene pagos registrados.');
+  }
+
+  return {
+    manejada: true,
+    respuesta: parts.join(' ')
+  };
+};
+
+const handleUltimoPagoIntent = async ({ tenantId, pregunta, cobrador, intentConfig }) => {
+  const context = await resolveClienteContext({ pregunta, tenantId, cobrador, intentConfig });
+
+  if (context.multiple) {
+    return { manejada: true, respuesta: buildMultipleMatchesResponse(context.matches) };
+  }
+
+  if (!context.cliente) {
+    if (context.searchType === 'missing') {
+      return buildMissingClientResponse(context);
+    }
+
+    return {
+      manejada: true,
+      respuesta: context.searchType === 'cedula'
+        ? 'No encontre un cliente con esa cedula en tu cartera.'
+        : 'No encontre ese cliente en tu cartera.'
+    };
+  }
+
+  const pago = await findUltimoPagoCliente({ tenantId, clienteId: context.cliente._id });
+  if (!pago) {
+    return { manejada: true, respuesta: `No encontre pagos registrados para ${context.cliente.nombre}.` };
+  }
+
+  return {
+    manejada: true,
+    respuesta: `El ultimo pago de ${context.cliente.nombre} fue de ${formatMoney(pago.monto)} el ${formatDate(pago.fecha)}.`
+  };
+};
+
+const handlePendientesIntent = async ({ tenantId, pregunta, cobrador }) => {
+  const hasSpecificClient = Boolean(extractCedula(pregunta) || extractExplicitName(pregunta));
+
+  if (hasSpecificClient) {
+    return handleSaldoIntent({
+      tenantId,
+      pregunta,
+      cobrador,
+      intentConfig: { intent: 'saldo' }
+    });
+  }
+
+  const query = await buildScopedPrestamoQuery({
     tenantId,
-    estado: { $in: ['activo', 'vencido'] }
-  })
+    cobrador,
+    estados: ['activo', 'vencido']
+  });
+
+  if (!query) {
+    return {
+      manejada: true,
+      respuesta: 'No hay pagos pendientes registrados para tu cartera.'
+    };
+  }
+
+  const prestamos = await Prestamo.find(query)
     .populate('clienteId', 'nombre cedula')
     .sort({ createdAt: -1 })
     .lean();
-  console.log('Telegram IA operativa | cantidad de préstamos encontrados:', prestamos.length);
 
   const pendientes = prestamos
     .map((prestamo) => ({
@@ -461,51 +602,57 @@ const handlePendientesIntent = async ({ tenantId, pregunta }) => {
   if (!pendientes.length) {
     return {
       manejada: true,
-      respuesta: 'No hay pagos pendientes registrados para esta oficina.'
+      respuesta: cobrador?._id
+        ? 'No hay pagos pendientes registrados para tu cartera.'
+        : 'No hay pagos pendientes registrados para esta oficina.'
     };
   }
 
   return {
     manejada: true,
     respuesta: [
-      'Clientes con pagos pendientes:',
+      cobrador?._id ? 'Clientes con pagos pendientes en tu cartera:' : 'Clientes con pagos pendientes en esta oficina:',
       ...pendientes.map((item, index) => (
-        `${index + 1}. ${item.prestamo.clienteId?.nombre || 'Cliente'} - Cédula ${item.prestamo.clienteId?.cedula || 'N/A'} - Saldo: ${formatMoney(item.saldoPendiente)} - Estado: ${item.prestamo.estado}`
+        `${index + 1}. ${item.prestamo.clienteId?.nombre || 'Cliente'} - Cedula ${item.prestamo.clienteId?.cedula || 'N/A'} - Saldo: ${formatMoney(item.saldoPendiente)} - Estado: ${item.prestamo.estado}`
       ))
     ].join('\n')
   };
 };
 
-const handlePrestamosIntent = async ({ tenantId, pregunta }) => {
+const handlePrestamosIntent = async ({ tenantId, pregunta, cobrador }) => {
   const normalized = normalizeText(pregunta);
   const paidIntent = normalized.includes('pagado');
   const estados = paidIntent ? ['pagado'] : ['activo', 'vencido'];
+  const query = await buildScopedPrestamoQuery({ tenantId, cobrador, estados });
 
-  const prestamos = await Prestamo.find({
-    tenantId,
-    estado: { $in: estados }
-  })
+  if (!query) {
+    return {
+      manejada: true,
+      respuesta: paidIntent
+        ? 'No hay prestamos pagados registrados para tu cartera.'
+        : 'No hay prestamos activos registrados para tu cartera.'
+    };
+  }
+
+  const prestamos = await Prestamo.find(query)
     .populate('clienteId', 'nombre cedula')
     .sort({ createdAt: -1 })
     .limit(MAX_RESULTS)
     .lean();
-  console.log('Telegram IA operativa | cantidad de préstamos encontrados:', prestamos.length);
 
   if (!prestamos.length) {
     return {
       manejada: true,
       respuesta: paidIntent
-        ? 'No hay préstamos pagados registrados para esta oficina.'
-        : 'No hay préstamos activos registrados para esta oficina.'
+        ? (cobrador?._id ? 'No hay prestamos pagados registrados para tu cartera.' : 'No hay prestamos pagados registrados para esta oficina.')
+        : (cobrador?._id ? 'No hay prestamos activos registrados para tu cartera.' : 'No hay prestamos activos registrados para esta oficina.')
     };
   }
-
-  const title = paidIntent ? 'Préstamos pagados:' : 'Préstamos activos:';
 
   return {
     manejada: true,
     respuesta: [
-      title,
+      paidIntent ? 'Prestamos pagados:' : 'Prestamos activos:',
       ...prestamos.map((prestamo, index) => (
         `${index + 1}. ${prestamo.clienteId?.nombre || 'Cliente'} - Saldo: ${formatMoney(getSaldoPendiente(prestamo))} - Estado: ${prestamo.estado}`
       ))
@@ -513,57 +660,173 @@ const handlePrestamosIntent = async ({ tenantId, pregunta }) => {
   };
 };
 
-const handleUltimoPagoIntent = async ({ tenantId, pregunta }) => {
-  const context = await resolveClienteContext({ pregunta, tenantId });
+const handlePagosHoyIntent = async ({ tenantId, cobrador }) => {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const end = new Date();
+  end.setHours(23, 59, 59, 999);
 
-  if (context.multiple) {
-    return { manejada: true, respuesta: buildMultipleMatchesResponse(context.matches) };
+  const query = {
+    tenantId,
+    fecha: { $gte: start, $lte: end }
+  };
+
+  if (cobrador?._id) {
+    query.registradoPor = cobrador._id;
   }
 
-  if (!context.cliente) {
+  const pagos = await Pago.find(query)
+    .sort({ fecha: -1, createdAt: -1 })
+    .limit(MAX_RESULTS)
+    .populate('clienteId', 'nombre cedula')
+    .lean();
+
+  if (!pagos.length) {
     return {
       manejada: true,
-      respuesta: context.searchType === 'cedula'
-        ? 'No encontré un cliente con esa cédula en tu oficina.'
-        : 'No encontré ese cliente en tu oficina.'
+      respuesta: cobrador?._id
+        ? 'No tienes pagos registrados hoy.'
+        : 'No hay pagos registrados hoy en esta oficina.'
     };
   }
 
-  const pago = await findUltimoPagoCliente({ tenantId, clienteId: context.cliente._id });
-  console.log('Telegram IA operativa | último pago encontrado:', pago ? {
-    id: String(pago._id),
-    monto: pago.monto,
-    fecha: pago.fecha
-  } : null);
-  if (!pago) {
-    return { manejada: true, respuesta: 'No encontré pagos registrados para ese cliente.' };
+  const total = pagos.reduce((sum, pago) => sum + Number(pago.monto || 0), 0);
+
+  return {
+    manejada: true,
+    respuesta: [
+      cobrador?._id
+        ? `Hoy llevas ${pagos.length} pagos por ${formatMoney(total)}.`
+        : `Hoy hay ${pagos.length} pagos registrados por ${formatMoney(total)}.`,
+      ...pagos.map((pago, index) => (
+        `${index + 1}. ${pago.clienteId?.nombre || 'Cliente'} - ${formatMoney(pago.monto)} - ${formatDate(pago.fecha)}`
+      ))
+    ].join('\n')
+  };
+};
+
+const handleMorososIntent = async ({ tenantId, cobrador }) => {
+  const query = await buildScopedPrestamoQuery({
+    tenantId,
+    cobrador,
+    estados: ['activo', 'vencido']
+  });
+
+  if (!query) {
+    return {
+      manejada: true,
+      respuesta: 'No tienes clientes morosos registrados.'
+    };
+  }
+
+  const now = new Date();
+  const prestamos = await Prestamo.find(query)
+    .populate('clienteId', 'nombre cedula')
+    .sort({ fechaVencimiento: 1 })
+    .lean();
+
+  const morosos = prestamos
+    .filter((prestamo) => getSaldoPendiente(prestamo) > 0 && new Date(prestamo.fechaVencimiento) < now)
+    .slice(0, MAX_RESULTS);
+
+  if (!morosos.length) {
+    return {
+      manejada: true,
+      respuesta: cobrador?._id
+        ? 'No tienes clientes morosos registrados.'
+        : 'No hay clientes morosos registrados en esta oficina.'
+    };
   }
 
   return {
     manejada: true,
-    respuesta: `El último pago de ${context.cliente.nombre} fue de ${formatMoney(pago.monto)} el ${formatDate(pago.fecha)}.`
+    respuesta: [
+      cobrador?._id ? 'Clientes morosos de tu cartera:' : 'Clientes morosos de esta oficina:',
+      ...morosos.map((prestamo, index) => (
+        `${index + 1}. ${prestamo.clienteId?.nombre || 'Cliente'} - Cedula ${prestamo.clienteId?.cedula || 'N/A'} - Saldo: ${formatMoney(getSaldoPendiente(prestamo))} - Vence: ${formatDate(prestamo.fechaVencimiento)}`
+      ))
+    ].join('\n')
   };
 };
 
-const processIntent = async ({ intent, tenantId, pregunta }) => {
-  if (intent === 'saldo') {
-    return handleSaldoIntent({ tenantId, pregunta });
+const handleResumenIntent = async ({ tenantId, cobrador }) => {
+  const query = await buildScopedPrestamoQuery({
+    tenantId,
+    cobrador,
+    estados: ['activo', 'vencido']
+  });
+
+  if (!query) {
+    return {
+      manejada: true,
+      respuesta: 'No hay informacion operativa para mostrar en este momento.'
+    };
   }
 
-  if (intent === 'cuotas') {
-    return handleCuotasIntent({ tenantId, pregunta });
+  const [prestamos, pagosHoy] = await Promise.all([
+    Prestamo.find(query).lean(),
+    Pago.find({
+      tenantId,
+      ...(cobrador?._id ? { registradoPor: cobrador._id } : {}),
+      fecha: {
+        $gte: new Date(new Date().setHours(0, 0, 0, 0)),
+        $lte: new Date(new Date().setHours(23, 59, 59, 999))
+      }
+    }).lean()
+  ]);
+
+  const activos = prestamos.filter((prestamo) => ['activo', 'vencido'].includes(prestamo.estado)).length;
+  const cartera = prestamos.reduce((sum, prestamo) => sum + getSaldoPendiente(prestamo), 0);
+  const morosos = prestamos.filter((prestamo) => getSaldoPendiente(prestamo) > 0 && new Date(prestamo.fechaVencimiento) < new Date()).length;
+  const totalPagosHoy = pagosHoy.reduce((sum, pago) => sum + Number(pago.monto || 0), 0);
+
+  return {
+    manejada: true,
+    respuesta: [
+      cobrador?._id ? 'Resumen de tu cartera:' : 'Resumen de la oficina:',
+      `Prestamos activos: ${activos}.`,
+      `Cartera pendiente: ${formatMoney(cartera)}.`,
+      `Clientes morosos: ${morosos}.`,
+      `Pagos registrados hoy: ${pagosHoy.length} por ${formatMoney(totalPagosHoy)}.`
+    ].join(' ')
+  };
+};
+
+const processIntent = async ({ intentConfig, tenantId, pregunta, cobrador }) => {
+  if (intentConfig.intent === 'saldo') {
+    return handleSaldoIntent({ tenantId, pregunta, cobrador, intentConfig });
   }
 
-  if (intent === 'pendientes') {
-    return handlePendientesIntent({ tenantId, pregunta });
+  if (intentConfig.intent === 'cuotas') {
+    return handleCuotasIntent({ tenantId, pregunta, cobrador, intentConfig });
   }
 
-  if (intent === 'prestamos') {
-    return handlePrestamosIntent({ tenantId, pregunta });
+  if (intentConfig.intent === 'historial') {
+    return handleHistorialIntent({ tenantId, pregunta, cobrador, intentConfig });
   }
 
-  if (intent === 'ultimo_pago') {
-    return handleUltimoPagoIntent({ tenantId, pregunta });
+  if (intentConfig.intent === 'pendientes') {
+    return handlePendientesIntent({ tenantId, pregunta, cobrador, intentConfig });
+  }
+
+  if (intentConfig.intent === 'prestamos_activos' || intentConfig.intent === 'prestamos_pagados') {
+    return handlePrestamosIntent({ tenantId, pregunta, cobrador, intentConfig });
+  }
+
+  if (intentConfig.intent === 'ultimo_pago') {
+    return handleUltimoPagoIntent({ tenantId, pregunta, cobrador, intentConfig });
+  }
+
+  if (intentConfig.intent === 'pagos_hoy') {
+    return handlePagosHoyIntent({ tenantId, cobrador });
+  }
+
+  if (intentConfig.intent === 'clientes_morosos') {
+    return handleMorososIntent({ tenantId, cobrador });
+  }
+
+  if (intentConfig.intent === 'resumen_oficina') {
+    return handleResumenIntent({ tenantId, cobrador });
   }
 
   return { manejada: false };
@@ -575,7 +838,17 @@ const procesarPreguntaOperativa = async ({
   cobrador
 }) => {
   const normalizedQuestion = String(pregunta || '').trim();
-  const intent = detectIntent(normalizedQuestion);
+  let intentConfig = detectIntent(normalizedQuestion);
+
+  if (!intentConfig) {
+    const normalized = normalizeText(normalizedQuestion);
+    const hasClientNarrative = /^[a-z]+\s+(esta|tiene)\b/.test(normalized) && /\b(mora|atrasad)/.test(normalized);
+    const hasClientEntity = Boolean(extractCedula(normalizedQuestion) || hasClientNarrative);
+
+    if (hasClientEntity && (normalized.includes('mora') || normalized.includes('atrasad'))) {
+      intentConfig = { intent: 'historial' };
+    }
+  }
 
   console.log('Telegram IA operativa | tenantId:', tenantId);
   console.log('Telegram IA operativa | cobrador:', cobrador ? {
@@ -583,17 +856,18 @@ const procesarPreguntaOperativa = async ({
     nombre: cobrador.nombre
   } : null);
   console.log('Telegram IA operativa | pregunta:', normalizedQuestion);
-  console.log('Telegram IA operativa | intención detectada:', intent || 'ninguna');
+  console.log('Telegram IA operativa | intencion detectada:', intentConfig?.intent || 'ninguna');
 
-  if (!intent) {
+  if (!intentConfig) {
     return { manejada: false };
   }
 
   try {
     const resultado = await processIntent({
-      intent,
+      intentConfig,
       tenantId,
-      pregunta: normalizedQuestion
+      pregunta: normalizedQuestion,
+      cobrador
     });
 
     console.log('Telegram IA operativa | respuesta generada:', resultado?.respuesta || 'sin respuesta');
@@ -606,5 +880,9 @@ const procesarPreguntaOperativa = async ({
 };
 
 module.exports = {
+  detectIntent,
+  extractCedula,
+  extractExplicitName,
+  normalizeText,
   procesarPreguntaOperativa
 };

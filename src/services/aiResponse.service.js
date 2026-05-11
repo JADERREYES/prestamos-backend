@@ -2,6 +2,12 @@ const { getOpenAIClient } = require('./embedding.service');
 
 const getChatModel = () => process.env.OPENAI_CHAT_MODEL || process.env.AI_MODEL || 'gpt-4.1-mini';
 
+const buildDocumentoReferencia = (documento) => {
+  const fileName = documento?.fileName || documento?.metadata?.originalName || documento?.titulo || 'Documento sin titulo';
+  const categoria = documento?.categoria || 'general';
+  return `${fileName} (${categoria})`;
+};
+
 const generarRespuestaIA = async ({ pregunta, documentos }) => {
   const preguntaNormalizada = String(pregunta || '').trim();
   const documentosLista = Array.isArray(documentos) ? documentos : [];
@@ -13,13 +19,14 @@ const generarRespuestaIA = async ({ pregunta, documentos }) => {
   }
 
   if (!documentosLista.length) {
-    return 'No tengo informacion suficiente en los documentos de esta empresa para responder esa pregunta.';
+    return 'Todavia no tengo documentos cargados para esta empresa. Un administrador debe subir el manual o las politicas en PDF.';
   }
 
   const contexto = documentosLista
     .map((documento, index) => [
       `Documento ${index + 1}`,
       `Titulo: ${documento.titulo || 'Sin titulo'}`,
+      `Archivo: ${documento.fileName || documento.metadata?.originalName || 'Sin archivo'}`,
       `Categoria: ${documento.categoria || 'general'}`,
       `Fuente: ${documento.fuente || 'manual'}`,
       `Contenido: ${documento.contenido || ''}`
@@ -34,7 +41,14 @@ const generarRespuestaIA = async ({ pregunta, documentos }) => {
       messages: [
         {
           role: 'system',
-          content: 'Eres un asistente del sistema de prestamos. Responde de forma clara, breve y util. Usa solo el contexto entregado. Si el contexto no contiene la respuesta, indica que no tienes informacion suficiente.'
+          content: [
+            'Eres un asistente operativo y documental de un sistema de prestamos.',
+            'Responde de forma clara, breve y util para Telegram.',
+            'Usa solo el contexto entregado.',
+            'No inventes politicas, requisitos ni procedimientos.',
+            'Si el contexto no contiene la respuesta, responde exactamente: "No encontre esa informacion en los documentos de esta empresa."',
+            'Si respondes con informacion encontrada, menciona al final una referencia corta con el nombre del archivo o documento.'
+          ].join(' ')
         },
         {
           role: 'user',
@@ -51,7 +65,21 @@ const generarRespuestaIA = async ({ pregunta, documentos }) => {
       throw error;
     }
 
-    return respuesta;
+    if (/no tengo informacion suficiente/i.test(respuesta)) {
+      return 'No encontre esa informacion en los documentos de esta empresa.';
+    }
+
+    if (/no encontre esa informacion en los documentos de esta empresa/i.test(respuesta)) {
+      return 'No encontre esa informacion en los documentos de esta empresa.';
+    }
+
+    const referencias = [...new Set(documentosLista.slice(0, 3).map(buildDocumentoReferencia))];
+
+    if (!referencias.length) {
+      return respuesta;
+    }
+
+    return `${respuesta}\n\nFuente: ${referencias.join(' | ')}`;
   } catch (error) {
     if (error.code) throw error;
 

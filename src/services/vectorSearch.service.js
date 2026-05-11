@@ -2,6 +2,8 @@ const mongoose = require('mongoose');
 const { getDocumentoVectorialModel } = require('../models/DocumentoVectorial');
 const { crearEmbedding } = require('./embedding.service');
 
+const isSuperAdminRole = (rol) => rol === 'superadmin' || rol === 'superadministrador';
+
 const getTopK = (topK) => {
   const defaultTopK = Number(process.env.VECTOR_TOP_K || 5);
   const parsed = Number(topK || defaultTopK);
@@ -18,14 +20,33 @@ const normalizeTenantId = (tenantId) => {
   return String(tenantId).trim().toLowerCase();
 };
 
+const normalizeStringValue = (value, fallback = '') => String(value || fallback).trim();
+
+const normalizeDocumentGroupId = (documentGroupId) => {
+  const value = normalizeStringValue(documentGroupId);
+  return value || null;
+};
+
+const canUseGlobalContext = (options = {}) => (
+  Boolean(options.allowGlobal) && isSuperAdminRole(options.userRole)
+);
+
 const guardarDocumentoVectorial = async ({
   titulo,
   contenido,
   categoria,
   fuente,
   tenantId,
+  documentGroupId,
+  sourceType,
+  fileName,
+  version,
+  activo,
+  uploadedBy,
+  uploadedByRole,
   metadata,
-  allowGlobal = false
+  allowGlobal = false,
+  userRole
 }) => {
   const tituloNormalizado = String(titulo || '').trim();
   const contenidoNormalizado = String(contenido || '').trim();
@@ -50,7 +71,9 @@ const guardarDocumentoVectorial = async ({
 
   const normalizedTenantId = normalizeTenantId(tenantId);
 
-  if (!normalizedTenantId && !allowGlobal) {
+  const allowGlobalContext = canUseGlobalContext({ allowGlobal, userRole });
+
+  if (!normalizedTenantId && !allowGlobalContext) {
     const error = new Error('tenantId es obligatorio para documentos de IA por empresa');
     error.code = 'TENANT_ID_REQUIRED';
     throw error;
@@ -62,9 +85,16 @@ const guardarDocumentoVectorial = async ({
   const documento = await DocumentoVectorial.create({
     titulo: tituloNormalizado,
     contenido: contenidoNormalizado,
-    categoria: String(categoria || 'general').trim(),
-    fuente: String(fuente || 'manual').trim(),
+    categoria: normalizeStringValue(categoria, 'general'),
+    fuente: normalizeStringValue(fuente, 'manual'),
     tenantId: normalizedTenantId,
+    documentGroupId: normalizeDocumentGroupId(documentGroupId),
+    sourceType: normalizeStringValue(sourceType, 'text'),
+    fileName: normalizeStringValue(fileName),
+    version: Number(version) > 0 ? Number(version) : 1,
+    activo: activo !== false,
+    uploadedBy: uploadedBy || null,
+    uploadedByRole: normalizeStringValue(uploadedByRole),
     metadata: metadata || {},
     embedding
   });
@@ -91,9 +121,9 @@ const buscarDocumentosSimilares = async (pregunta, opciones = {}) => {
   const DocumentoVectorial = getDocumentoVectorialModel();
   const topK = getTopK(opciones.topK || opciones.limite);
   const normalizedTenantId = normalizeTenantId(opciones.tenantId);
-  const allowGlobal = Boolean(opciones.allowGlobal);
+  const allowGlobalContext = canUseGlobalContext(opciones);
 
-  if (!normalizedTenantId && !allowGlobal) {
+  if (!normalizedTenantId && !allowGlobalContext) {
     const error = new Error('tenantId es obligatorio para busquedas de IA por empresa');
     error.code = 'TENANT_ID_REQUIRED';
     throw error;
@@ -109,9 +139,14 @@ const buscarDocumentosSimilares = async (pregunta, opciones = {}) => {
         limit: topK,
         ...(normalizedTenantId ? {
           filter: {
-            tenantId: normalizedTenantId
+            tenantId: normalizedTenantId,
+            activo: true
           }
-        } : {})
+        } : {
+          filter: {
+            activo: true
+          }
+        })
       }
     },
     {
@@ -121,6 +156,13 @@ const buscarDocumentosSimilares = async (pregunta, opciones = {}) => {
         categoria: 1,
         fuente: 1,
         tenantId: 1,
+        documentGroupId: 1,
+        sourceType: 1,
+        fileName: 1,
+        version: 1,
+        activo: 1,
+        uploadedBy: 1,
+        uploadedByRole: 1,
         metadata: 1,
         createdAt: 1,
         updatedAt: 1,
@@ -143,6 +185,18 @@ const listarDocumentosPorTenant = async (tenantId) => {
     .lean();
 };
 
+const contarDocumentosPorTenant = async (tenantId, opciones = {}) => {
+  const normalizedTenantId = normalizeTenantId(tenantId);
+  const DocumentoVectorial = getDocumentoVectorialModel();
+  const query = { tenantId: normalizedTenantId };
+
+  if (opciones.soloActivos !== false) {
+    query.activo = true;
+  }
+
+  return DocumentoVectorial.countDocuments(query);
+};
+
 const eliminarDocumentoPorTenant = async (tenantId, documentoId) => {
   const normalizedTenantId = normalizeTenantId(tenantId);
 
@@ -160,8 +214,54 @@ const eliminarDocumentoPorTenant = async (tenantId, documentoId) => {
   }).lean();
 };
 
+const desactivarDocumentoGrupoPorTenant = async (tenantId, documentGroupId) => {
+  const normalizedTenantId = normalizeTenantId(tenantId);
+  const normalizedGroupId = normalizeDocumentGroupId(documentGroupId);
+
+  if (!normalizedGroupId) {
+    const error = new Error('documentGroupId es requerido');
+    error.code = 'DOCUMENT_GROUP_ID_REQUIRED';
+    throw error;
+  }
+
+  const DocumentoVectorial = getDocumentoVectorialModel();
+
+  return DocumentoVectorial.updateMany(
+    {
+      tenantId: normalizedTenantId,
+      documentGroupId: normalizedGroupId
+    },
+    {
+      $set: {
+        activo: false
+      }
+    }
+  );
+};
+
+const eliminarDocumentoGrupoPorTenant = async (tenantId, documentGroupId) => {
+  const normalizedTenantId = normalizeTenantId(tenantId);
+  const normalizedGroupId = normalizeDocumentGroupId(documentGroupId);
+
+  if (!normalizedGroupId) {
+    const error = new Error('documentGroupId es requerido');
+    error.code = 'DOCUMENT_GROUP_ID_REQUIRED';
+    throw error;
+  }
+
+  const DocumentoVectorial = getDocumentoVectorialModel();
+
+  return DocumentoVectorial.deleteMany({
+    tenantId: normalizedTenantId,
+    documentGroupId: normalizedGroupId
+  });
+};
+
 module.exports = {
+  contarDocumentosPorTenant,
+  desactivarDocumentoGrupoPorTenant,
   eliminarDocumentoPorTenant,
+  eliminarDocumentoGrupoPorTenant,
   guardarDocumentoVectorial,
   buscarDocumentosSimilares,
   listarDocumentosPorTenant,

@@ -26,8 +26,44 @@ const documentoVectorialSchema = new mongoose.Schema({
   },
   tenantId: {
     type: String,
-    required: false,
+    required: true,
+    index: true,
+    trim: true
+  },
+  documentGroupId: {
+    type: String,
+    default: null,
+    index: true,
+    trim: true
+  },
+  sourceType: {
+    type: String,
+    default: 'text',
+    trim: true
+  },
+  fileName: {
+    type: String,
+    default: '',
+    trim: true
+  },
+  version: {
+    type: Number,
+    default: 1,
+    min: 1
+  },
+  activo: {
+    type: Boolean,
+    default: true,
+    index: true
+  },
+  uploadedBy: {
+    type: mongoose.Schema.Types.ObjectId,
     default: null
+  },
+  uploadedByRole: {
+    type: String,
+    default: '',
+    trim: true
   },
   metadata: {
     type: mongoose.Schema.Types.Mixed,
@@ -41,6 +77,9 @@ const documentoVectorialSchema = new mongoose.Schema({
 }, {
   timestamps: true
 });
+
+documentoVectorialSchema.index({ tenantId: 1, documentGroupId: 1, activo: 1 });
+documentoVectorialSchema.index({ tenantId: 1, fileName: 1, activo: 1 });
 
 const getDocumentoVectorialModel = () => {
   const vectorDb = mongoose.connection.useDb(vectorDbName, { useCache: true });
